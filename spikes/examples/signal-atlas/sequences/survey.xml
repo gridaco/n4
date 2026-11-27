@@ -1,0 +1,23 @@
+<sequence name="Contour survey" background="#eeebde" camera="wide">
+  <camera id="wide"/>
+  <camera id="detail" center-x="608" center-y="263" zoom="1.22"/>
+  <g name="Survey plate" position="354 80">
+    <mask><rect width="568" height="380" corner-radius="16"/></mask>
+    <image name="Synthetic bathymetry" source="assets/relief.png"/>
+    <path name="Survey transect" d="M-12 276 C92 274 121 106 218 127 S325 271 408 196 S502 100 588 124" fill="none" stroke="#ff8245" stroke-width="3.5" stroke-linecap="round">
+      <animate attributeName="stroke-end">
+        <key frame="0" value="0" ease="cubic(0.25 0.05 0.45 1)"/>
+        <key frame="46" value="1"/>
+      </animate>
+    </path>
+    <svg name="Survey station" position="400 188" source="assets/station.svg"/>
+  </g>
+  <text name="Station series" position="38 82" font="assets/N4GridSans.ttf" size="17" width="305" fill="#264c52"><copy>FIELD STUDIES  /  04</copy></text>
+  <text name="Film title" position="34 163" font="assets/N4GridSans.ttf" size="77" width="320" fill="#172e37"><copy>SIGNAL&#10;ATLAS</copy>
+    <animate attributeName="translate-y"><key frame="0" value="20" ease="cubic(0.13 0.75 0.28 1)"/><key frame="18" value="0"/></animate>
+  </text>
+  <rect name="Index rule" x="39" y="373" width="62" height="5" fill="#ef713d"/>
+  <text name="Edition" position="38 397" font="assets/N4GridSans.ttf" size="17" width="299" fill="#264c52"><copy>UNDERSEA SURVEY&#10;TRANSECT NO. 04</copy></text>
+  <path name="Foot rule" d="M38 475 H922" fill="none" stroke="#859995" stroke-width="1"/>
+  <text name="Plate legend" position="38 485" font="assets/N4GridSans.ttf" size="15" width="740" fill="#264c52"><copy>FIG. 01   /   CONTOUR INTERVAL  20 M</copy></text>
+</sequence>

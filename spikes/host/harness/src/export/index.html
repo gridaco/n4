@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en" class="scheme-dark">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Export Video</title>
+  <link rel="stylesheet" href="viewer.css">
+</head>
+<body class="flex h-dvh flex-col bg-zinc-900 font-sans text-[13px] text-zinc-100">
+  <main class="flex min-h-0 flex-1 flex-col gap-3 px-5 py-4" aria-labelledby="export-project">
+    <header class="flex items-center gap-3">
+      <div class="flex size-9 shrink-0 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-800 text-sky-300">
+        <i data-lucide="film" class="size-5"></i>
+      </div>
+      <div class="min-w-0">
+        <h1 id="export-project" class="truncate text-base font-semibold">Loading project…</h1>
+        <p class="text-xs text-zinc-400">Full timeline</p>
+      </div>
+    </header>
+    <dl class="grid shrink-0 grid-cols-2 gap-x-4 gap-y-2 rounded-lg border border-zinc-800 bg-zinc-950/45 px-4 py-2">
+      <div>
+        <dt class="text-[11px] text-zinc-400">Format</dt>
+        <dd class="mt-0.5 font-medium">MP4 <span class="font-normal text-zinc-400">· H.264 / AAC</span></dd>
+      </div>
+      <div>
+        <dt class="text-[11px] text-zinc-400">Resolution</dt>
+        <dd data-field="size" class="mt-0.5 font-medium tabular-nums">—</dd>
+      </div>
+      <div>
+        <dt class="text-[11px] text-zinc-400">Frame rate</dt>
+        <dd data-field="fps" class="mt-0.5 font-medium tabular-nums">—</dd>
+      </div>
+      <div>
+        <dt class="text-[11px] text-zinc-400">Duration</dt>
+        <dd data-field="duration" class="mt-0.5 font-medium tabular-nums">—</dd>
+      </div>
+    </dl>
+    <div class="min-h-0 flex-1 space-y-2 overflow-auto">
+      <div id="export-meter" class="flex items-center gap-3" hidden>
+        <progress data-role="export-progress" aria-label="Export progress" class="h-1.5 min-w-0 flex-1 accent-sky-400" hidden></progress>
+        <span data-role="export-percent" aria-hidden="true" class="w-9 shrink-0 text-right text-xs text-zinc-300 tabular-nums"></span>
+      </div>
+      <p role="status" class="wrap-anywhere text-xs leading-4 text-zinc-300 data-[level=error]:text-amber-200 data-[level=success]:text-emerald-300"></p>
+    </div>
+  </main>
+  <footer class="flex shrink-0 items-center justify-end gap-2 border-t border-zinc-800 px-5 py-2.5">
+    <button class="viewer-button" data-role="close-export">Close</button>
+    <button class="viewer-button" data-role="cancel-export" hidden>Cancel export</button>
+    <button class="inline-flex h-7 items-center gap-2 rounded-md bg-sky-300 px-3 font-semibold text-sky-950 hover:enabled:bg-sky-200 disabled:opacity-50" data-role="start-export" disabled>
+      <i data-lucide="download" class="size-3.5"></i>Export…
+    </button>
+  </footer>
+  <script type="module" src="export.js"></script>
+</body>
+</html>

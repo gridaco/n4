@@ -1,0 +1,7 @@
+project field-unit fps 24/1 size 1920x1080
+[0,144) V1 instrument
+  [0,50) CAM wide
+  [50,101) CAM monitor
+  [101,144) CAM pack
+[0,144) V2 imprint
+[0,144) A1 score

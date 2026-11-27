@@ -1,0 +1,24 @@
+#usda 1.0
+(
+    defaultPrim = "Rig"
+    metersPerUnit = 0.01
+    upAxis = "Z"
+    timeCodesPerSecond = 24
+)
+def Xform "Rig" {
+    double3 xformOp:translate = (10,0,0)
+    uniform token[] xformOpOrder = ["xformOp:translate"]
+    def Xform "Hinge" {
+        double3 xformOp:translate = (0,20,0)
+        float3 xformOp:translate:pivot = (1,2,3)
+        float xformOp:rotateZ = 0
+        float xformOp:rotateZ.timeSamples = { 0: 0, 10: 90 }
+        uniform token[] xformOpOrder = ["xformOp:translate","xformOp:translate:pivot","xformOp:rotateZ","!invert!xformOp:translate:pivot"]
+        def Mesh "Blade" {
+            uniform token subdivisionScheme = "none"
+            point3f[] points = [(0,0,0),(10,0,0),(0,10,0)]
+            int[] faceVertexCounts = [3]
+            int[] faceVertexIndices = [0,1,2]
+        }
+    }
+}

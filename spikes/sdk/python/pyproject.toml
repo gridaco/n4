@@ -1,0 +1,14 @@
+[build-system]
+requires = ["uv_build>=0.9.26,<0.10"]
+build-backend = "uv_build"
+
+[project]
+name = "n4-authoring"
+version = "0.0.0"
+description = "Author native N4 project documents in Python"
+requires-python = ">=3.9"
+readme = "README.md"
+
+[tool.uv.build-backend]
+module-name = "n4"
+module-root = ""

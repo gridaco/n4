@@ -1,0 +1,30 @@
+#usda 1.0
+(
+    defaultPrim = "Card"
+)
+
+def Mesh "Card" (prepend apiSchemas = ["MaterialBindingAPI"])
+{
+    uniform token subdivisionScheme = "none"
+    point3f[] points = [(0,0,0), (1,0,0), (0,1,0)]
+    int[] faceVertexCounts = [3]
+    int[] faceVertexIndices = [0,1,2]
+    rel material:binding = </Paint>
+}
+
+def Material "Paint"
+{
+    token outputs:surface.connect = </Paint/Surface.outputs:surface>
+    def Shader "Surface"
+    {
+        uniform token info:id = "UsdPreviewSurface"
+        color3f inputs:diffuseColor.connect = </Paint/Swatch.outputs:rgb>
+        token outputs:surface
+    }
+    def Shader "Swatch"
+    {
+        uniform token info:id = "UsdUVTexture"
+        float4 inputs:fallback = (1, 0, 0, 1)
+        float3 outputs:rgb
+    }
+}

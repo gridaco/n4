@@ -1,0 +1,10 @@
+packages:
+  - kit
+  - harness
+
+catalog:
+  electron: 45.5.0
+
+allowBuilds:
+  '@parcel/watcher': false
+  esbuild: true

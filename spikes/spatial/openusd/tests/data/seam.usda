@@ -1,0 +1,52 @@
+#usda 1.0
+(
+    defaultPrim = "Card"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+def Mesh "Card" (prepend apiSchemas = ["MaterialBindingAPI"]) {
+    uniform token subdivisionScheme = "none"
+    point3f[] points = [(0,0,0),(1,0,0),(1,1,0),(0,1,0)]
+    int[] faceVertexCounts = [3,3]
+    int[] faceVertexIndices = [0,1,2,0,2,3]
+    normal3f[] normals = [(0,0,1)] (interpolation = "constant")
+    texCoord2f[] primvars:st = [(0,0),(1,0),(1,1),(0,1),(.5,.5)] (
+        interpolation = "faceVarying"
+    )
+    int[] primvars:st:indices = [0,1,2,4,2,3]
+    rel material:binding = </Print>
+}
+def Material "Print" {
+    token outputs:surface.connect = </Print/PBR.outputs:surface>
+    def Shader "PBR" {
+        uniform token info:id = "UsdPreviewSurface"
+        color3f inputs:diffuseColor.connect = </Print/Color.outputs:rgb>
+        float inputs:roughness.connect = </Print/Data.outputs:g>
+        token outputs:surface
+    }
+    def Shader "UV" {
+        uniform token info:id = "UsdPrimvarReader_float2"
+        token inputs:varname = "st"
+        float2 outputs:result
+    }
+    def Shader "Color" {
+        uniform token info:id = "UsdUVTexture"
+        token inputs:wrapS = "repeat"
+        token inputs:wrapT = "repeat"
+        token inputs:sourceColorSpace = "sRGB"
+        asset inputs:file = @quadrants.png@
+        float2 inputs:st.connect = </Print/UV.outputs:result>
+        float3 outputs:rgb
+    }
+    def Shader "Data" {
+        uniform token info:id = "UsdUVTexture"
+        token inputs:wrapS = "repeat"
+        token inputs:wrapT = "repeat"
+        token inputs:sourceColorSpace = "raw"
+        float4 inputs:scale = (1,0.5,1,1)
+        float4 inputs:bias = (0,0.25,0,0)
+        asset inputs:file = @quadrants.png@
+        float2 inputs:st.connect = </Print/UV.outputs:result>
+        float outputs:g
+    }
+}

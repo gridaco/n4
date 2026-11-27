@@ -1,0 +1,1 @@
+../../src/render/gpu/gaussian.wgsl

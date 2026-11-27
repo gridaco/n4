@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="124">
+  <defs>
+    <linearGradient id="spectrum" gradientUnits="userSpaceOnUse" x1="10" y1="0" x2="668" y2="0">
+      <stop offset="0" stop-color="#7edcca"/>
+      <stop offset="55%" stop-color="#f2f96c"/>
+      <stop offset="1" stop-color="#f8a675"/>
+    </linearGradient>
+  </defs>
+  <g opacity="0.65">
+    <path d="M10 91 C120 91 155 16 245 16 S380 93 486 67 S626 28 668 45 L668 106 H10 Z" fill="url(#spectrum)"/>
+    <path d="M10 74 C110 84 137 102 258 68 S470 28 583 52 L668 76 V106 H10Z" fill="url(#spectrum)"/>
+  </g>
+  <path d="M10 91 C120 91 155 16 245 16 S380 93 486 67 S626 28 668 45" fill="none" stroke="url(#spectrum)" stroke-width="2" stroke-linecap="round"/>
+</svg>

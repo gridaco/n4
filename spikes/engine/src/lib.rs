@@ -1,0 +1,443 @@
+//! Native frame evaluation shared by the CLI, offline encoder and presentation probe.
+pub mod camera;
+#[cfg(feature = "host-audio")]
+pub mod editor;
+pub mod export;
+pub mod graphics;
+#[cfg(feature = "host-audio")]
+pub mod host;
+pub mod inspect;
+mod media;
+mod plan;
+pub mod preview;
+mod project;
+pub mod project_watch;
+pub mod proxy;
+mod render;
+pub mod session;
+pub mod transport;
+
+#[cfg(test)]
+mod backdrop_tests;
+#[cfg(test)]
+mod shadow_tests;
+
+use anyhow::{Context, Result, ensure};
+use media::IndexedVideo;
+use render::{gpu::Gpu, text};
+use serde::Serialize;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+pub use plan::{CameraSelection, FrameRequest, OverlayFrameRequest, VideoFrameRequest};
+pub use project::{
+    AuthoringDocument, Background, Backplate, FrameRate, GraphicsPlacement, OccurrenceRanges,
+    OutputDamage, Project, ProjectDamage, RevisionChange, Shot, TimelineChange, Title,
+};
+
+pub(crate) const MAX_SURFACE_DIMENSION: u32 = 8192;
+
+pub struct Engine {
+    project: Project,
+    revision: u64,
+    gpu: Gpu,
+    sources: SourceProfiles,
+    reader: media::VideoReader,
+    paragraph: Option<text::Paragraph>,
+    graphics: graphics::PaintCache,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct RenderTrace {
+    pub revision: u64,
+    pub request: FrameRequest,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proxy: Option<PathBuf>,
+    pub paragraph_lines: Option<usize>,
+    /// Backplate [left, top, width, height] in output pixels.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backplate_rect: Option<[i64; 4]>,
+    pub reused_decode: bool,
+    pub reused_paragraph: bool,
+    /// This presentation came from the interactive composed-picture cache.
+    pub reused_composite: bool,
+    pub graphics: graphics::PaintStats,
+}
+
+#[derive(Clone)]
+pub struct Frame {
+    pub size: [u32; 2],
+    pub rgba: Arc<Vec<u8>>,
+    pub trace: RenderTrace,
+}
+
+impl Engine {
+    pub fn new(project: Project) -> Result<Self> {
+        Self::new_with_artwork(project, None, None)
+    }
+
+    fn new_with_artwork(
+        mut project: Project,
+        svg_assets: Option<&graphics::PreparedSvgAssets>,
+        text_layouts: Option<&graphics::PreparedTextLayouts>,
+    ) -> Result<Self> {
+        project.validate()?;
+        let mut graphics = graphics::PaintCache::default();
+        if let Some(assets) = svg_assets {
+            graphics.install_svg_assets(assets);
+        }
+        if let Some(layouts) = text_layouts {
+            graphics.install_text_layouts(layouts);
+        } else {
+            graphics.place_text_anchors(&mut project, None)?;
+        }
+        graphics.prepare_spatial_meshes(&project)?;
+        Gpu::validate_backdrop_scratch(&project, &graphics)?;
+        Gpu::validate_shadow_scratch(&project, &graphics)?;
+        Gpu::validate_source_blur_scratch(&project, &graphics)?;
+        let sources = prepare_sources(&project, &HashMap::new(), true)?;
+        let gpu = Gpu::new()?;
+        for layers in project.graphic_scopes() {
+            gpu.validate_effects(layers, &mut graphics, project.size)?;
+        }
+        Ok(Self {
+            project,
+            revision: 0,
+            gpu,
+            sources,
+            reader: Default::default(),
+            paragraph: None,
+            graphics,
+        })
+    }
+
+    pub fn adapter_name(&self) -> &str {
+        self.gpu.adapter_name()
+    }
+
+    /// A read-only device allocation counter for an external performance sampler.
+    /// Returns None on backends that do not expose resident allocation sizes.
+    pub fn gpu_allocation_probe(&self) -> impl Fn() -> Option<u64> + Send + 'static {
+        self.gpu.allocation_probe()
+    }
+
+    pub fn project(&self) -> &Project {
+        &self.project
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Pin remaining external artwork when opening a live edit session,
+    /// including SVGs referenced only as masks. All hosts prepare USD meshes at open.
+    fn prepare_session_artwork(&mut self) -> Result<()> {
+        let staged = self.graphics.stage_rasters(&self.project, None)?;
+        self.paragraph = text::paint_project_title(&self.project.title)?;
+        self.graphics.install_rasters(staged);
+        Ok(())
+    }
+
+    /// Prepare changed source indices before installing an edit. Unchanged decoders
+    /// and shaped paragraphs can survive an edit at a parked frame.
+    pub fn replace_project(&mut self, mut next: Project) -> Result<()> {
+        next.validate()?;
+        if self.project == next {
+            return Ok(());
+        }
+        let mut layout = graphics::PaintCache::default();
+        layout.place_text_anchors(&mut next, Some(&self.graphics))?;
+        let same_profile = next.size == self.project.size && next.fps == self.project.fps;
+        let graphics_changed = next.graphic_scopes().ne(self.project.graphic_scopes());
+        // Longer cuts and changed exposure can reveal more of a wiped mask.
+        Gpu::validate_backdrop_scratch(&next, &self.graphics)?;
+        Gpu::validate_shadow_scratch(&next, &self.graphics)?;
+        Gpu::validate_source_blur_scratch(&next, &self.graphics)?;
+        let staged = if graphics_changed {
+            Some(
+                self.graphics
+                    .stage_with_layout(&next, Some(&self.project), layout)?,
+            )
+        } else {
+            None
+        };
+        let source_changes = if !same_profile {
+            Some(prepare_sources(&next, &HashMap::new(), true)?)
+        } else if self.project.shots != next.shots || graphics_changed {
+            Some(prepare_sources(&next, &self.sources, true)?)
+        } else {
+            None
+        };
+        if (graphics_changed || !same_profile)
+            && let Err(error) = next.graphic_scopes().try_for_each(|scope| {
+                self.gpu
+                    .validate_effects(scope, &mut self.graphics, next.size)
+            })
+        {
+            // A failed compile may have read a new shader path. On retry,
+            // read its corrected source while keeping the accepted shaders pinned.
+            self.graphics.retain(&self.project);
+            return Err(error);
+        }
+        if let Some(new) = source_changes {
+            // Artwork on a material can sample footage. Its authored layers can be
+            // identical while its decoded frame changes with the output/source profile.
+            if !same_profile
+                || new.len() != self.sources.len()
+                || new.iter().any(|(key, source)| {
+                    self.sources
+                        .get(key)
+                        .is_none_or(|previous| !Arc::ptr_eq(source, previous))
+                })
+            {
+                self.graphics.live_surfaces.clear();
+            }
+            if same_profile {
+                self.reader
+                    .retain_sources(|key| new.values().any(|index| index.has_identity(key)));
+            } else {
+                self.reader = Default::default();
+            }
+            self.sources = new;
+        }
+        let old = &self.project.title;
+        let title = &next.title;
+        if old.text != title.text
+            || old.font != title.font
+            || old.font_size != title.font_size
+            || old.width != title.width
+            || old.backplate != title.backplate
+        {
+            self.paragraph = None;
+        }
+        if let Some(staged) = staged {
+            self.graphics.retain(&next);
+            self.graphics.install_rasters(staged);
+        }
+        self.project = next;
+        self.revision += 1;
+        Ok(())
+    }
+
+    /// Apply both title changes as one revision. An invalid edit preserves the previous state.
+    pub fn edit_title(&mut self, start: Option<u32>, width: Option<u32>) -> Result<()> {
+        let mut next = self.project.clone();
+        let title = &mut next.title;
+        title.start = start.unwrap_or(title.start);
+        title.width = width.unwrap_or(title.width);
+        self.replace_project(next)
+    }
+
+    pub fn render(&mut self, frame: u32) -> Result<Frame> {
+        self.render_view(frame, None)
+    }
+
+    /// Reconstruct trace metadata for a picture whose pixels survived a revision.
+    fn resolved_request(&self, frame: u32) -> Result<FrameRequest> {
+        let mut request = self.project.request(frame)?;
+        resolve_request_sources(&self.sources, self.project.size, &mut request)?;
+        Ok(request)
+    }
+
+    /// An isolated thumbnail can select a subset of the accepted project's
+    /// scopes while sharing its prepared graphics and decode profiles.
+    fn render_view(&mut self, frame: u32, view: Option<&Project>) -> Result<Frame> {
+        let project = view.unwrap_or(&self.project);
+        let mut request = project.request(frame)?;
+        let (shot, shot_frame) = project.shot_at(frame)?;
+        let mut history = Vec::with_capacity(request.source_history.len());
+        let sources = resolve_request_sources(&self.sources, project.size, &mut request)?;
+        let primary = sources.primary;
+        self.reader.begin_frame(
+            primary
+                .into_iter()
+                .chain(sources.layers.iter().map(|(source, _)| *source)),
+        );
+        let (video, reused_decode) = if let Some(source) = primary {
+            // Read the window in presentation order so a cold seek can decode forward once.
+            for entry in request.source_history.iter().rev() {
+                let prior = if let Some(tick) = entry {
+                    Some(self.reader.read(source, *tick)?.0)
+                } else {
+                    None
+                };
+                history.push(prior);
+            }
+            history.reverse();
+            let ordinal = request
+                .source_frame
+                .context("missing primary source ordinal")?;
+            let (pixels, reused) = self.reader.read(source, ordinal)?;
+            (Some(pixels), reused)
+        } else {
+            (None, false)
+        };
+        let [width, height] = project.size;
+        // Preserve the authored tick for painter lookup, and expose the actual
+        // presentation ordinal in the trace (a VFR hold may map several ticks to one).
+        let mut video_layers = HashMap::new();
+        for (layer, (source, tick)) in request.video_layers.iter().zip(sources.layers) {
+            let key = (layer.source.as_path(), layer.size, tick);
+            if let std::collections::hash_map::Entry::Vacant(entry) = video_layers.entry(key) {
+                entry.insert(self.reader.read(source, layer.source_frame)?.0);
+            }
+        }
+        let [num, den] = request.title_opacity;
+        let title_visible = num > 0 && (!request.text.is_empty() || request.backplate.is_some());
+        let reused_paragraph = title_visible && self.paragraph.is_some();
+        if title_visible && self.paragraph.is_none() {
+            self.paragraph = text::paint_project_title(&project.title)?;
+        }
+        let visible = self.paragraph.as_ref().filter(|_| title_visible);
+        let padding = request
+            .backplate
+            .map_or([0, 0], |b| b.padding.map(i32::from));
+        let [x, y] = [
+            request.title_position[0].saturating_sub(padding[0]),
+            request.title_position[1].saturating_sub(padding[1]),
+        ];
+        let backplate_rect = visible
+            .and_then(|p| p.plate_size)
+            .map(|[w, h]| [i64::from(x), i64::from(y), i64::from(w), i64::from(h)]);
+        let overlay = visible.map(|p| {
+            (
+                p.rgba.as_slice(),
+                p.width,
+                p.height,
+                x,
+                y,
+                num as f32 / den as f32,
+            )
+        });
+        let inputs = render::gpu::FrameInputs {
+            size: project.size,
+            primary: match (&video, &shot.background) {
+                (Some(rgba), None) if !history.is_empty() => {
+                    render::gpu::PrimaryPicture::DecodedHistory(rgba, &history)
+                }
+                (Some(rgba), None) => render::gpu::PrimaryPicture::Decoded(rgba),
+                (None, Some(background)) => render::gpu::PrimaryPicture::Background(background),
+                _ => anyhow::bail!("expected exactly one primary picture"),
+            },
+            video_layers: &video_layers,
+            overlay,
+            scopes: project.paint_scopes(shot, shot_frame, frame).collect(),
+        };
+        let (rgba, graphics) = self.gpu.compose_view(
+            inputs,
+            project.exposure,
+            shot.camera_at(shot_frame),
+            &mut self.graphics,
+        )?;
+        Ok(Frame {
+            size: [width, height],
+            rgba: Arc::new(rgba),
+            trace: RenderTrace {
+                revision: self.revision,
+                request,
+                proxy: None,
+                paragraph_lines: visible.map(|p| p.lines),
+                backplate_rect,
+                reused_decode,
+                reused_paragraph,
+                reused_composite: false,
+                graphics,
+            },
+        })
+    }
+}
+
+// Decode profiles own their scale filter and cache identity. One asset can be a
+// full-frame shot and a small inset in the very same output frame.
+type SourceProfiles = HashMap<(PathBuf, [u32; 2]), Arc<IndexedVideo>>;
+
+struct RequestSources<'a> {
+    primary: Option<&'a IndexedVideo>,
+    /// Each layer's index and authored tick, in paint order.
+    layers: Vec<(&'a IndexedVideo, u32)>,
+}
+
+/// Resolve authored ticks to presentation ordinals without decoding any pictures.
+fn resolve_request_sources<'a>(
+    sources: &'a SourceProfiles,
+    size: [u32; 2],
+    request: &mut FrameRequest,
+) -> Result<RequestSources<'a>> {
+    let primary = request
+        .source
+        .as_ref()
+        .map(|path| {
+            sources
+                .get(&(path.clone(), size))
+                .map(Arc::as_ref)
+                .context("missing validated source")
+        })
+        .transpose()?;
+    if let Some(source) = primary {
+        for tick in request.source_history.iter_mut().flatten() {
+            *tick = source.resolve(*tick)?;
+        }
+        let tick = request
+            .source_frame
+            .context("missing primary source tick")?;
+        request.source_frame = Some(source.resolve(tick)?);
+    }
+    let layers = request
+        .video_layers
+        .iter_mut()
+        .map(|layer| {
+            let source = sources
+                .get(&(layer.source.clone(), layer.size))
+                .context("missing validated video layer source")?;
+            let tick = layer.source_frame;
+            layer.source_frame = source.resolve(tick)?;
+            Ok((source.as_ref(), tick))
+        })
+        .collect::<Result<_>>()?;
+    Ok(RequestSources { primary, layers })
+}
+
+fn prepare_sources(
+    project: &Project,
+    existing: &SourceProfiles,
+    include_layers: bool,
+) -> Result<SourceProfiles> {
+    let mut profiles = SourceProfiles::new();
+    let mut add = |path: &Path, size: [u32; 2], start: u32, duration: u32| -> Result<()> {
+        use std::collections::hash_map::Entry;
+        let index = match profiles.entry((path.to_owned(), size)) {
+            Entry::Occupied(e) => e.into_mut(),
+            Entry::Vacant(e) => {
+                let index = if let Some(existing) = existing.get(e.key()) {
+                    existing.clone()
+                } else {
+                    Arc::new(
+                        IndexedVideo::open(path, size[0], size[1], project.fps)
+                            .with_context(|| format!("open {}", path.display()))?,
+                    )
+                };
+                e.insert(index)
+            }
+        };
+        ensure!(
+            start
+                .checked_add(duration)
+                .is_some_and(|end| end <= index.frame_count()),
+            "trim exceeds available frames in {}",
+            path.display()
+        );
+        Ok(())
+    };
+    for shot in &project.shots {
+        if let Some(source) = &shot.source {
+            add(source, project.size, shot.source_in, shot.duration)?;
+        }
+    }
+    if include_layers {
+        for layer in project.video_clips() {
+            add(&layer.source, layer.size, layer.source_in, layer.duration)?;
+        }
+    }
+    Ok(profiles)
+}

@@ -1,0 +1,22 @@
+[package]
+name = "nothing-openusd"
+version = "0.0.0"
+edition = "2024"
+publish = false
+links = "nothing_openusd"
+
+[features]
+default = ["sdk"]
+sdk = ["dep:image"]
+require-sdk = ["sdk"]
+
+[dependencies]
+anyhow = "1"
+image = { version = "0.25", optional = true, default-features = false, features = ["png", "jpeg"] }
+nothing-spatial = { path = "../scene" }
+
+[build-dependencies]
+cc = "1"
+
+[dev-dependencies]
+tempfile = "3"

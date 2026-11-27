@@ -1,0 +1,56 @@
+[package]
+name = "n4-engine"
+version = "0.0.0"
+edition = "2024"
+publish = false
+default-run = "n4"
+
+[features]
+default = ["openusd"]
+openusd = ["nothing-openusd/sdk"]
+native-decode = []
+host-audio = ["dep:sdl2", "dep:getrandom"]
+device-probe = ["host-audio", "dep:egui"]
+
+[[bin]]
+name = "n4-host"
+path = "src/bin/n4-host.rs"
+required-features = ["host-audio"]
+
+[[bin]]
+name = "n4-device"
+path = "src/bin/device.rs"
+required-features = ["device-probe"]
+
+[[bin]]
+name = "n4-player"
+path = "src/bin/player/main.rs"
+required-features = ["device-probe"]
+
+[dependencies]
+nothing-spatial = { path = "../spatial/scene" }
+nothing-openusd = { path = "../spatial/openusd", default-features = false }
+nothing-spatial-wgpu = { path = "../spatial/wgpu" }
+anyhow = "1"
+getrandom = { version = "0.4", optional = true }
+clap = { version = "4", features = ["derive"] }
+png = "0.18"
+tempfile = "3"
+pollster = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+roxmltree = "0.20"
+unicode-segmentation = "1.13"
+sdl2 = { version = "0.38", optional = true }
+egui = { version = "=0.33.3", optional = true }
+skia-safe = { version = "=0.90.0", features = ["textlayout"] }
+wgpu.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-metal = { version = "=0.3.2", default-features = false, features = ["MTLDevice"] }
+
+[build-dependencies]
+cc = "1"

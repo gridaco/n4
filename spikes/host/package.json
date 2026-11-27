@@ -1,0 +1,26 @@
+{
+  "name": "n4-host-workspace",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "pnpm run typecheck && pnpm run bundle",
+    "typecheck": "tsc --noEmit",
+    "bundle": "node build.mjs",
+    "watch": "node --watch-path=kit/src --watch-path=harness/src --watch-path=build.mjs --watch-preserve-output build.mjs",
+    "start": "electron harness",
+    "test": "node --test kit/test/*.test.ts",
+    "package": "python3 -B harness/package-macos.py"
+  },
+  "devDependencies": {
+    "@n4/host-kit": "workspace:*",
+    "@tailwindcss/cli": "4.3.5",
+    "@types/node": "24.10.1",
+    "electron": "catalog:",
+    "esbuild": "0.28.2",
+    "typescript": "7.0.2"
+  },
+  "packageManager": "pnpm@12.18.0"
+}

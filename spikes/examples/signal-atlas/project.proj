@@ -1,0 +1,12 @@
+project signal-atlas fps 24/1 size 960x540
+[0,64) V1 survey
+[0,56) V2 transmission
+[0,128) A1 score
+[64,128) V1 analysis
+  [0,64) V1 sounding
+[128,192) V1 survey
+  [0,12) CAM wide
+  [12,48) CAM detail
+  [48,64) CAM wide
+[128,192) V2 transmission
+[128,192) A1 reprise

@@ -1,0 +1,59 @@
+name: Qualify standalone OpenUSD reader on a fresh Mac
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  build-reader:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: mamba-org/setup-micromamba@f457c30a868e4760d3a6fcea5f25dc655b8edf39 # v3.2.1
+        with:
+          environment-name: usd
+          create-args: >-
+            --channel conda-forge
+            openusd=26.05
+            python=3.12
+          init-shell: bash
+      - name: Build and package the reader
+        shell: bash -el {0}
+        working-directory: spikes
+        run: |
+          set -eu
+          test "$(uname -m)" = arm64
+          export OPENUSD_DIR="$CONDA_PREFIX"
+          cargo build --release --locked -p nothing-openusd --features require-sdk --example inspect_stage
+          mkdir -p "$RUNNER_TEMP/transfer"
+          python3 spatial/openusd/tools/package_macos.py engine/target/release/examples/inspect_stage "$OPENUSD_DIR" "$RUNNER_TEMP/transfer/reader"
+          cp examples/field-unit/assets/field.usdc "$RUNNER_TEMP/transfer/"
+          "$RUNNER_TEMP/transfer/reader/bin/inspect_stage" "$RUNNER_TEMP/transfer/field.usdc" /World/Recorder > "$RUNNER_TEMP/transfer/expected.txt"
+          grep -Fx 'slot /World/_materials/Display' "$RUNNER_TEMP/transfer/expected.txt"
+          COPYFILE_DISABLE=1 tar -czf "$RUNNER_TEMP/reader-test.tar.gz" -C "$RUNNER_TEMP/transfer" .
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: reader-test
+          path: ${{ runner.temp }}/reader-test.tar.gz
+          retention-days: 1
+  independent-mac:
+    needs: build-reader
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: reader-test
+          path: ${{ runner.temp }}/received
+      - name: Read the packaged Field Unit stage without installing an SDK
+        run: |
+          set -eu
+          test "$(uname -m)" = arm64
+          dest="$RUNNER_TEMP/Moved USD reader"
+          mkdir "$dest"
+          tar -xzf "$RUNNER_TEMP/received/reader-test.tar.gz" -C "$dest"
+          "$dest/reader/check-reader.sh"
+          /usr/bin/env -i PATH=/usr/bin:/bin HOME="$RUNNER_TEMP" TMPDIR="$RUNNER_TEMP" \
+            "$dest/reader/bin/inspect_stage" "$dest/field.usdc" /World/Recorder > "$dest/actual.txt"
+          cmp "$dest/expected.txt" "$dest/actual.txt"

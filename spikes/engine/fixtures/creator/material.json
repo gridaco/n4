@@ -1,0 +1,89 @@
+{
+  "size": [
+    960,
+    540
+  ],
+  "fps": [
+    30,
+    1
+  ],
+  "shots": [
+    {
+      "source": "paper.mp4",
+      "source_in": 0,
+      "duration": 15
+    }
+  ],
+  "title": {
+    "text": "A wider stereo field",
+    "font": "../fonts/N4GridSans.ttf",
+    "font_size": 42,
+    "position": [
+      72,
+      95
+    ],
+    "width": 600,
+    "start": 0,
+    "fade_frames": 0,
+    "backplate": {
+      "padding": [
+        18,
+        10
+      ],
+      "rgba": [
+        23,
+        40,
+        52,
+        230
+      ]
+    }
+  },
+  "graphics": [
+    {
+      "content": {
+        "type": "label",
+        "text": "SOUND STUDIES   /   FIGURE 02",
+        "font": "../fonts/N4GridSans.ttf",
+        "size": 15,
+        "width": 380,
+        "rgb": [
+          203,
+          224,
+          176
+        ]
+      },
+      "position": [
+        55,
+        34
+      ]
+    },
+    {
+      "content": {
+        "type": "svg",
+        "source": "stereo-field.svg"
+      },
+      "position": [
+        87,
+        281
+      ]
+    },
+    {
+      "content": {
+        "type": "label",
+        "text": "Left and right channels, normalized amplitude",
+        "font": "../fonts/N4GridSans.ttf",
+        "size": 19,
+        "width": 690,
+        "rgb": [
+          219,
+          225,
+          203
+        ]
+      },
+      "position": [
+        90,
+        422
+      ]
+    }
+  ]
+}

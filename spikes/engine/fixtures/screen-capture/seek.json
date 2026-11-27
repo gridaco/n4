@@ -1,0 +1,17 @@
+{
+  "size": [640, 360],
+  "fps": [30, 1],
+  "shots": [
+    {"source": "recording.mp4", "source_in": 237, "duration": 900},
+    {"source": "recording.mp4", "source_in": 3620, "duration": 720}
+  ],
+  "title": {
+    "text": "Capture verification",
+    "font": "../fonts/N4GridSans.ttf",
+    "font_size": 24,
+    "width": 320,
+    "position": [32, 32],
+    "start": 2000,
+    "fade_frames": 0
+  }
+}

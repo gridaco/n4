@@ -1,0 +1,291 @@
+{
+  "size": [
+    960,
+    540
+  ],
+  "fps": [
+    30,
+    1
+  ],
+  "shots": [
+    {
+      "source": "paper.mp4",
+      "source_in": 0,
+      "duration": 225
+    }
+  ],
+  "title": {
+    "text": "The sounding line",
+    "font": "../fonts/N4GridSans.ttf",
+    "font_size": 52,
+    "position": [
+      54,
+      53
+    ],
+    "width": 850,
+    "start": 0,
+    "fade_frames": 10
+  },
+  "graphics": [
+    {
+      "content": {
+        "type": "svg",
+        "source": "axes.svg"
+      },
+      "position": [
+        109,
+        172
+      ],
+      "filter": {
+        "shader": "dry-ink.wgsl",
+        "amount": 16
+      }
+    },
+    {
+      "content": {
+        "type": "svg",
+        "source": "series.svg"
+      },
+      "position": [
+        109,
+        172
+      ],
+      "wipe": [
+        18,
+        171
+      ]
+    },
+    {
+      "content": {
+        "type": "label",
+        "text": "FIELD NOTES   /   SIGNAL",
+        "font": "../fonts/N4GridSans.ttf",
+        "size": 15,
+        "width": 460,
+        "rgb": [
+          216,
+          218,
+          122
+        ]
+      },
+      "position": [
+        56,
+        29
+      ]
+    },
+    {
+      "content": {
+        "type": "label",
+        "text": "Synthetic sounding levels, arbitrary units",
+        "font": "../fonts/N4GridSans.ttf",
+        "size": 18,
+        "width": 750,
+        "rgb": [
+          233,
+          230,
+          207
+        ]
+      },
+      "position": [
+        57,
+        115
+      ]
+    },
+    {
+      "content": {
+        "type": "label",
+        "text": "300",
+        "font": "../fonts/N4GridSans.ttf",
+        "size": 16,
+        "width": 48,
+        "rgb": [
+          161,
+          166,
+          143
+        ]
+      },
+      "position": [
+        58,
+        365
+      ]
+    },
+    {
+      "content": {
+        "type": "label",
+        "text": "340",
+        "font": "../fonts/N4GridSans.ttf",
+        "size": 16,
+        "width": 48,
+        "rgb": [
+          161,
+          166,
+          143
+        ]
+      },
+      "position": [
+        58,
+        298
+      ]
+    },
+    {
+      "content": {
+        "type": "label",
+        "text": "380",
+        "font": "../fonts/N4GridSans.ttf",
+        "size": 16,
+        "width": 48,
+        "rgb": [
+          161,
+          166,
+          143
+        ]
+      },
+      "position": [
+        58,
+        232
+      ]
+    },
+    {
+      "content": {
+        "type": "label",
+        "text": "420",
+        "font": "../fonts/N4GridSans.ttf",
+        "size": 16,
+        "width": 48,
+        "rgb": [
+          161,
+          166,
+          143
+        ]
+      },
+      "position": [
+        58,
+        165
+      ]
+    },
+    {
+      "content": {
+        "type": "label",
+        "text": "0",
+        "font": "../fonts/N4GridSans.ttf",
+        "size": 16,
+        "width": 62,
+        "rgb": [
+          233,
+          230,
+          207
+        ]
+      },
+      "position": [
+        94,
+        389
+      ]
+    },
+    {
+      "content": {
+        "type": "label",
+        "text": "2",
+        "font": "../fonts/N4GridSans.ttf",
+        "size": 16,
+        "width": 62,
+        "rgb": [
+          233,
+          230,
+          207
+        ]
+      },
+      "position": [
+        354,
+        389
+      ]
+    },
+    {
+      "content": {
+        "type": "label",
+        "text": "4",
+        "font": "../fonts/N4GridSans.ttf",
+        "size": 16,
+        "width": 62,
+        "rgb": [
+          233,
+          230,
+          207
+        ]
+      },
+      "position": [
+        614,
+        389
+      ]
+    },
+    {
+      "content": {
+        "type": "label",
+        "text": "6",
+        "font": "../fonts/N4GridSans.ttf",
+        "size": 16,
+        "width": 62,
+        "rgb": [
+          233,
+          230,
+          207
+        ]
+      },
+      "position": [
+        874,
+        389
+      ]
+    },
+    {
+      "content": {
+        "type": "label",
+        "text": "Source   Synthetic measurements for the N4 timing fixture",
+        "font": "../fonts/N4GridSans.ttf",
+        "size": 14,
+        "width": 850,
+        "rgb": [
+          161,
+          166,
+          143
+        ]
+      },
+      "position": [
+        56,
+        470
+      ]
+    },
+    {
+      "content": {
+        "type": "label",
+        "text": "PASS 0 - 6     /     SOUNDING SAMPLES",
+        "font": "../fonts/N4GridSans.ttf",
+        "size": 15,
+        "width": 680,
+        "rgb": [
+          233,
+          230,
+          207
+        ]
+      },
+      "position": [
+        57,
+        436
+      ]
+    }
+  ],
+  "audio": [
+    {
+      "source": "chart-lead.wav",
+      "start_sample": 14400,
+      "source_in_sample": 0,
+      "samples": 288000,
+      "gain": 0.9
+    },
+    {
+      "source": "chart-bed.wav",
+      "start_sample": 0,
+      "source_in_sample": 0,
+      "samples": 360000,
+      "gain": 0.5
+    }
+  ]
+}

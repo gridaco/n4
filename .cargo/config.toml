@@ -1,0 +1,3 @@
+[build]
+# Keep the native tools and local SDK at the paths used by the spike launchers.
+target-dir = "spikes/engine/target"

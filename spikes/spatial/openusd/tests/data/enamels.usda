@@ -1,0 +1,53 @@
+#usda 1.0
+(
+    defaultPrim = "Swatch"
+    metersPerUnit = 1
+    upAxis = "Y"
+)
+def Mesh "Swatch" (prepend apiSchemas = ["MaterialBindingAPI"]) {
+    uniform token subdivisionScheme = "none"
+    point3f[] points = [(-1,0,0),(-1,1,0),(0,0,0),(0,1,0),(1,0,0)]
+    int[] faceVertexCounts = [3,3,3]
+    int[] faceVertexIndices = [0,2,1,1,2,3,3,2,4]
+    normal3f[] normals = [(0,0,1),(0,0.6,0.8),(0,0,1),(0,0.6,0.8),(0,0,1)] (interpolation = "vertex")
+    rel material:binding = </Ink>
+    def GeomSubset "CobaltFace" (prepend apiSchemas = ["MaterialBindingAPI"]) {
+        uniform token elementType = "face"
+        uniform token familyName = "materialBind"
+        int[] indices = [1]
+        rel material:binding = </Cobalt>
+    }
+    def GeomSubset "ClayFace" (prepend apiSchemas = ["MaterialBindingAPI"]) {
+        uniform token elementType = "face"
+        uniform token familyName = "materialBind"
+        int[] indices = [2]
+        rel material:binding = </Clay>
+    }
+}
+def Material "Cobalt" {
+    token outputs:surface.connect = </Cobalt/Finish.outputs:surface>
+    def Shader "Finish" {
+        uniform token info:id = "UsdPreviewSurface"
+        color3f inputs:diffuseColor = (0.02,0.1,1)
+        float inputs:roughness = 0.33
+        float inputs:clearcoat = 0.42
+        int inputs:useSpecularWorkflow = 1
+        token outputs:surface
+    }
+}
+def Material "Ink" {
+    token outputs:surface.connect = </Ink/Finish.outputs:surface>
+    def Shader "Finish" {
+        uniform token info:id = "UsdPreviewSurface"
+        color3f inputs:diffuseColor = (0.02,0.02,0.03)
+        token outputs:surface
+    }
+}
+def Material "Clay" {
+    token outputs:surface.connect = </Clay/Finish.outputs:surface>
+    def Shader "Finish" {
+        uniform token info:id = "UsdPreviewSurface"
+        color3f inputs:diffuseColor = (0.9,0.3,0.05)
+        token outputs:surface
+    }
+}

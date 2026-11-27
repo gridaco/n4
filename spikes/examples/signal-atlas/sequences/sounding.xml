@@ -1,0 +1,20 @@
+<sequence name="Sounding profile" background="#112e36">
+  <text name="Section" position="38 28" font="assets/N4GridSans.ttf" size="17" width="720" fill="#9dcfc5"><copy>FIELD STUDIES  /  04     SECTION A-A</copy></text>
+  <g name="Sounder">
+    <g name="Instrument" span="8 64">
+      <animate attributeName="translate-y"><key frame="0" value="24" ease="cubic(0.2 0.7 0.4 1)"/><key frame="12" value="0"/></animate>
+      <rect name="Signal lamp" x="39" y="80" width="24" height="5" fill="#fa824b">
+        <animate attributeName="opacity"><key frame="0" value="0"/><key frame="4" value="1"/></animate>
+      </rect>
+      <text name="Sounding title" position="36 99" font="assets/N4GridSans.ttf" size="66" width="900" fill="#eae8d9"><copy>ECHO SOUNDING</copy></text>
+    </g>
+  </g>
+  <svg name="Echo field" position="38 215" source="assets/echo.svg"/>
+  <path name="Echo return" d="M38 373 C92 373 119 328 162 338 S224 386 278 332 S353 232 405 298 S461 411 530 357 S608 275 681 312 S761 382 815 346 S875 308 922 320" fill="none" stroke="#ff8b52" stroke-width="4" stroke-linecap="round">
+    <animate attributeName="stroke-end"><key frame="0" value="0" ease="cubic(0.2 0.1 0.4 1)"/><key frame="45" value="1"/></animate>
+  </path>
+  <rect name="Sweep" y="205" width="2" height="251" fill="#c8e8d7">
+    <animate attributeName="x"><key frame="0" value="38"/><key frame="60" value="920"/></animate>
+  </rect>
+  <text name="Profile legend" position="38 482" font="assets/N4GridSans.ttf" size="16" width="884" fill="#9dcfc5"><copy>FIG. 02   /   DISTANCE ALONG TRACK                  DEPTH IN METRES</copy></text>
+</sequence>

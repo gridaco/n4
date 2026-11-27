@@ -1,0 +1,12 @@
+<sequence>
+  <g name="Maker imprint" span="0 50">
+    <rect name="Imprint field" x="54" y="43" width="365" height="67" corner-radius="33" fill="#e7e8df"/>
+    <rect x="75" y="64" width="22" height="22" corner-radius="11" fill="#fe733b"/>
+    <text name="Brand imprint" position="112 51" font="assets/N4GridSans.ttf" size="25" width="295" fill="#202725"><copy>INDEX INSTRUMENTS</copy></text>
+  </g>
+  <text span="0 50" name="Catalog number" position="76 653" font="assets/N4GridSans.ttf" size="23" width="495" fill="#29312c"><copy>R-01   /   PORTABLE AUDIO</copy></text>
+  <text span="0 50" name="Opening title" position="68 688" font="assets/N4GridSans.ttf" size="94" width="880" fill="#202725"><copy>FIELD UNIT</copy></text>
+  <text span="101 144" name="Closing catalog number" position="76 636" font="assets/N4GridSans.ttf" size="23" width="510" fill="#29312c"><copy>R-01   /   FIELD RECORDER</copy></text>
+  <text span="101 144" name="Closing title" position="68 676" font="assets/N4GridSans.ttf" size="94" width="820" fill="#202725"><copy>FIELD UNIT</copy></text>
+  <text span="101 144" name="Closing line" position="76 827" font="assets/N4GridSans.ttf" size="28" width="740" fill="#29312c"><copy>A studio you can carry.</copy></text>
+</sequence>

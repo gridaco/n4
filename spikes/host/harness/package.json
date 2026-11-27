@@ -1,0 +1,15 @@
+{
+  "name": "n4-viewer-harness",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main.cjs",
+  "dependencies": {
+    "@n4/host-kit": "workspace:*",
+    "lucide": "1.80.0"
+  },
+  "devDependencies": {
+    "electron": "catalog:",
+    "tailwindcss": "4.3.5"
+  }
+}

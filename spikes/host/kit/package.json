@@ -1,0 +1,25 @@
+{
+  "name": "@n4/host-kit",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./client": "./src/client/index.ts",
+    "./types": "./src/client/types.ts",
+    "./timeline": "./src/timeline/index.ts",
+    "./timeline.css": "./src/view/timeline.css",
+    "./timeline-view": "./src/view/timeline.ts",
+    "./viewer": "./src/view/viewer.ts",
+    "./preview": "./src/view/preview.ts",
+    "./electron-main": "./src/electron/main.ts",
+    "./electron-preload": "./src/electron/preload.ts"
+  },
+  "peerDependencies": {
+    "electron": "^45.5.0"
+  },
+  "peerDependenciesMeta": {
+    "electron": {
+      "optional": true
+    }
+  }
+}

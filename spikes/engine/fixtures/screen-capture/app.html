@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Cut notes</title>
+<style>
+@font-face{font-family:N4Grid;src:url(../fonts/N4GridSans.ttf) format("truetype")}
+*{box-sizing:border-box} body{margin:0;width:640px;height:360px;background:#f7f4ec;color:#172d35;font:16px N4Grid,monospace}
+header,main,footer {padding:0 32px} header{height:50px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #c7c9bc}
+h1{font-size:27px;line-height:1.1;margin:0} main{padding-top:15px} p{margin:8px 0;color:#52646b}
+section{height:44px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #d6d9ce}
+b{font-size:15px;font-weight:550} span{font-size:13px} button{font:inherit;color:white;background:#245650;border:0;padding:7px 14px;border-radius:4px}
+footer{position:absolute;top:304px;height:45px;display:flex;align-items:center;gap:8px} .bit{display:block;width:10px;height:10px}
+</style><header><strong>Cut notes</strong><span id="clock"></span></header>
+<main><h1>Review queue</h1><p>Choose a shot to check its latest revision.</p>
+<section><b>Opening titles</b><span id="one"></span></section><section><b>Interface demo</b><span id="two"></span></section>
+<section><b>Narration</b><span id="three"></span></section>
+<section><button id="review">Review next shot</button><span id="state"></span></section>
+</main><footer id="bits"></footer>
+<script>
+const marks = Array.from({length:12},()=>bits.appendChild(document.createElement('i')));
+marks.forEach(el=>el.className='bit');
+let serial=0;
+const progress=['Queued','Ready','In review','Revised'];
+function draw() {
+  document.getElementById('clock').textContent='Revision '+String(serial).padStart(4,'0');
+  [one,two,three].forEach((el,i)=>el.textContent=progress[(serial+i)%4]);
+  state.textContent='Shot '+(1+serial%3)+' selected';
+  marks.forEach((el,i)=>el.style.background=serial&(1<<i)?'white':'black');
+}
+review.addEventListener('click',()=>{serial++;draw()});
+draw();
+</script>

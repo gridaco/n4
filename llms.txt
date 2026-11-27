@@ -1,0 +1,33 @@
+# N4
+
+> N4 renders editable video projects with a native Rust engine. Signal Atlas is the copyable 2D template. Its master schedules shots, XML describes their artwork, and all media travel with the project.
+
+Start from the spikes branch on an Apple Silicon Mac. Install the prerequisites in README.md and run `just host-native` from the checkout root. Copy `spikes/examples/signal-atlas` to a new project folder. Read the AGENTS.md in that copy. Give the film a subject, a short sequence of beats, and a few frames where the intended motion should be unmistakable.
+
+A familiar production recipe is a good starting point. For a launch title, choreograph the emphasis across editable words. For a map explainer, reveal a route and carry its registration through a camera cut. Supply artwork, type, footage and audio you can use for the production.
+
+Edit `project.proj` for cuts and placements. A row such as `[0,64) V1 survey` places `sequences/survey.xml` for frames 0 through 63. V2 carries overlays, A1 carries sound, and indentation introduces parent-relative time. In a sequence, paint order follows child order. Editable labels use `<text><copy>…</copy></text>` with an explicit font, size and width. An `<animate attributeName="stroke-end">` on a path reveals its stroke using local frame/value keys. Edit the shared detail to update every placement, or duplicate it under a new ID for a different take.
+
+Set N4_BIN to the absolute path of spikes/engine/target/debug/n4 in the built checkout. From the project folder, run `"$N4_BIN" validate .`, then `"$N4_BIN" render . --frames 42,76,142 --out /tmp/n4-look-01`. Review the actual PNGs, including both sides of any cut you change. Export with `"$N4_BIN" export . --out /tmp/n4-cut-01.mp4`. Use a new output path for each review. No generator is required to render the template.
+
+## Make a film
+
+- [Install and run N4](README.md)
+- [Instructions for the agent working on the film](spikes/examples/signal-atlas/AGENTS.md)
+- [Signal Atlas edit and frame guide](spikes/examples/signal-atlas/README.md)
+- [Timeline syntax, time units and directory layout](docs/project-format.md)
+- [Visual XML including local animation, cameras, masks and source effects](spikes/docs/research/video-editor/sequence-xml.md)
+- [Python SDK for generated artwork and validated edits](spikes/sdk/python/README.md)
+
+## Worked productions
+
+- [Production recipes for editable motion graphics and explainers](spikes/docs/research/video-editor/production-recipes.md)
+- [Signal Atlas master showing a nested edit and shared shot](spikes/examples/signal-atlas/project.proj)
+- [Survey title, clipped image and animated path](spikes/examples/signal-atlas/sequences/survey.xml)
+- [Field Unit product spot with 3D camera cuts and a live display](spikes/examples/field-unit/README.md)
+
+## Optional
+
+- [Inspect selection, query geometry and save a track edit through the CLI](spikes/rfcs/0008-editor-session.md)
+- [Engineering contracts and capability boundaries](docs/README.md)
+- [Asset provenance for work submitted to N4](docs/assets.md)

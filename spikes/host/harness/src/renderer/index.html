@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en" class="scheme-dark">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>N4 Viewer</title>
+  <link rel="stylesheet" href="viewer.css">
+</head>
+<body class="viewer-layout grid h-dvh bg-zinc-900 font-sans text-[13px] text-zinc-100">
+  <header class="viewer-toolbar flex items-center gap-3 border-b border-zinc-700" data-role="viewer-toolbar">
+    <h1 class="truncate text-sm font-semibold">Opening project…</h1>
+    <span role="status" class="min-w-0 truncate text-zinc-300 data-[level=error]:text-amber-200"></span>
+    <div class="ml-auto flex items-center gap-2">
+      <div class="flex items-center gap-1" hidden data-role="editor-actions">
+        <button class="viewer-button" disabled data-role="undo" title="Undo" aria-label="Undo" aria-keyshortcuts="Meta+Z Control+Z"><i data-lucide="undo-2"></i></button>
+        <button class="viewer-button" disabled data-role="redo" title="Redo" aria-label="Redo" aria-keyshortcuts="Meta+Shift+Z Control+Shift+Z Control+Y"><i data-lucide="redo-2"></i></button>
+        <button class="viewer-button" disabled data-role="save" title="Save project" aria-keyshortcuts="Meta+S Control+S"><i data-lucide="save"></i>Save</button>
+      </div>
+      <button class="viewer-button" disabled data-role="reopen" title="Reload project from disk"><i data-lucide="rotate-cw"></i>Reload</button>
+      <button class="viewer-button" disabled data-role="export"><i data-lucide="download"></i>Export</button>
+    </div>
+  </header>
+  <main class="relative grid min-h-0 min-w-0 bg-zinc-950">
+    <canvas class="size-full min-h-0 object-contain" data-role="preview" aria-label="Native film preview"></canvas>
+    <canvas class="pointer-events-none absolute inset-0 size-full object-contain" data-role="preview-hud" aria-hidden="true"></canvas>
+    <output class="pointer-events-none absolute right-3 bottom-2.5 rounded bg-zinc-900/85 px-2 py-0.5 text-white tabular-nums empty:hidden" aria-live="off"></output>
+  </main>
+  <section class="flex items-center border-b border-zinc-700 px-4" aria-label="Transport">
+    <button class="viewer-button group" data-role="play" disabled aria-keyshortcuts="Space"><i data-lucide="play" class="group-data-[playing=true]:hidden"></i><i data-lucide="pause" class="hidden group-data-[playing=true]:block"></i><span>Play</span></button>
+  </section>
+  <div class="viewer-divider" role="separator" tabindex="0" aria-label="Timeline height" aria-orientation="horizontal" aria-controls="timeline-panel" data-role="timeline-divider"></div>
+  <div id="timeline-panel" class="min-h-0 min-w-0" data-role="timeline-root"></div>
+  <script type="module" src="renderer.js"></script>
+</body>
+</html>

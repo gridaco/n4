@@ -1,0 +1,6 @@
+.DS_Store
+*.proj.lock
+
+# Private production mirrors, third-party media, local receipts and recovery bundles.
+/.local/
+__pycache__/

@@ -1,0 +1,16 @@
+#usda 1.0
+(
+    subLayers = [@seam.usda@]
+)
+over "Print" {
+    over "PBR" {
+        normal3f inputs:normal.connect = </Print/Data.outputs:rgb>
+        float inputs:occlusion.connect = </Print/Data.outputs:r>
+        float inputs:metallic.connect = </Print/Data.outputs:b>
+    }
+    over "Data" {
+        float3 outputs:rgb
+        float outputs:r
+        float outputs:b
+    }
+}

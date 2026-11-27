@@ -1,0 +1,64 @@
+{
+  "size": [
+    384,
+    180
+  ],
+  "fps": [
+    30,
+    1
+  ],
+  "shots": [
+    {
+      "source": "cut-markers.mkv",
+      "source_in": 0,
+      "duration": 11
+    },
+    {
+      "source": "cut-markers.mkv",
+      "source_in": 10,
+      "duration": 1
+    },
+    {
+      "source": "cut-markers.mkv",
+      "source_in": 14,
+      "duration": 1
+    },
+    {
+      "source": "cut-markers.mkv",
+      "source_in": 14,
+      "duration": 7
+    }
+  ],
+  "title": {
+    "text": "Four samples / one picture",
+    "font": "../fonts/N4GridSans.ttf",
+    "font_size": 23,
+    "width": 350,
+    "position": [
+      15,
+      12
+    ],
+    "start": 0,
+    "fade_frames": 0
+  },
+  "graphics": [
+    {
+      "content": {
+        "type": "svg",
+        "source": "exposure-bar.svg"
+      },
+      "position": [
+        64,
+        81
+      ],
+      "wipe": [
+        8,
+        9
+      ]
+    }
+  ],
+  "exposure": {
+    "samples": 4,
+    "angle_degrees": 360
+  }
+}

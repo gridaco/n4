@@ -1,0 +1,6 @@
+[workspace]
+members = ["engine", "spatial/scene", "spatial/openusd", "spatial/wgpu"]
+resolver = "3"
+
+[workspace.dependencies]
+wgpu = { version = "=30.0.1", default-features = false, features = ["std", "metal", "wgsl"] }

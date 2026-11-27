@@ -1,0 +1,46 @@
+name: Contributor checks
+
+on:
+  push:
+    branches: [spikes, main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  headless:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Check tracked assets and links
+        run: python3 scripts/check-assets.py
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - name: Install native tools and pinned pnpm
+        run: |
+          brew install ffmpeg sdl2
+          npm install --global "$(node -p 'require("./spikes/host/package.json").packageManager')"
+      - name: Build CLI, native host and SDL demo player
+        working-directory: spikes/engine
+        run: LIBRARY_PATH="$(sdl2-config --prefix)/lib" cargo build --locked --features device-probe,native-decode --bin n4 --bin n4-host --bin n4-player
+      - name: Check formatting and CPU contracts
+        working-directory: spikes
+        run: |
+          cargo fmt --all --check
+          cargo test --locked -p nothing-openusd --no-default-features
+          cargo test --locked -p n4-engine --no-default-features --lib project::
+          engine/target/debug/n4 validate examples/signal-atlas
+      - name: Build the Electron harness and check its headless timeline
+        working-directory: spikes/host
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm run build
+          pnpm test
+          node --test kit/test/timeline-native.ts

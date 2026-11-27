@@ -1,0 +1,162 @@
+{
+  "size": [
+    960,
+    540
+  ],
+  "fps": [
+    30,
+    1
+  ],
+  "shots": [
+    {
+      "source": "take-b.mp4",
+      "source_in": 0,
+      "duration": 180
+    }
+  ],
+  "title": {
+    "text": "Keep the take.\nLose the hum.",
+    "font": "../fonts/N4GridSans.ttf",
+    "font_size": 45,
+    "position": [
+      40,
+      151
+    ],
+    "width": 329,
+    "start": 0,
+    "fade_frames": 8
+  },
+  "graphics": [
+    {
+      "content": {
+        "type": "footage"
+      }
+    },
+    {
+      "content": {
+        "type": "path",
+        "d": "M425 323 C488 323 509 244 563 251 S660 337 715 307 S814 241 871 259",
+        "fill": null,
+        "stroke": {
+          "rgba": [
+            255,
+            184,
+            120,
+            255
+          ],
+          "width": 4.0,
+          "cap": "round",
+          "join": "round"
+        }
+      },
+      "wipe": [
+        8,
+        155
+      ]
+    },
+    {
+      "content": {
+        "type": "backdrop",
+        "filter": {
+          "shader": "gaussian-blur.wgsl",
+          "sigma_px": 8.0
+        }
+      },
+      "position": [
+        474,
+        242
+      ],
+      "mask": {
+        "content": {
+          "type": "path",
+          "d": "M0 0 H330 V96 H0 Z"
+        },
+        "shader": {
+          "shader": "frost-mask.wgsl",
+          "period_frames": 90
+        }
+      }
+    },
+    {
+      "content": {
+        "type": "label",
+        "text": "Room tone",
+        "font": "../fonts/N4GridSans.ttf",
+        "size": 25,
+        "width": 260,
+        "rgb": [
+          252,
+          250,
+          246
+        ]
+      },
+      "position": [
+        505,
+        257
+      ]
+    },
+    {
+      "content": {
+        "type": "label",
+        "text": "60 Hz  /  Harmonic noise",
+        "font": "../fonts/N4GridSans.ttf",
+        "size": 15,
+        "width": 270,
+        "rgb": [
+          248,
+          247,
+          243
+        ]
+      },
+      "position": [
+        506,
+        293
+      ]
+    },
+    {
+      "content": {
+        "type": "label",
+        "text": "Audio restoration",
+        "font": "../fonts/N4GridSans.ttf",
+        "size": 16,
+        "width": 280,
+        "rgb": [
+          193,
+          188,
+          234
+        ]
+      },
+      "position": [
+        42,
+        108
+      ]
+    },
+    {
+      "content": {
+        "type": "label",
+        "text": "Reduce electrical noise from a room recording in one switch.",
+        "font": "../fonts/N4GridSans.ttf",
+        "size": 20,
+        "width": 272,
+        "rgb": [
+          226,
+          226,
+          237
+        ]
+      },
+      "position": [
+        42,
+        306
+      ]
+    }
+  ],
+  "audio": [
+    {
+      "source": "take-b.wav",
+      "start_sample": 0,
+      "source_in_sample": 0,
+      "samples": 288000,
+      "gain": 0.9
+    }
+  ]
+}

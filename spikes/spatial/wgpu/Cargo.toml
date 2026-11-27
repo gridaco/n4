@@ -1,0 +1,13 @@
+[package]
+name = "nothing-spatial-wgpu"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anyhow = "1"
+nothing-spatial = { path = "../scene" }
+wgpu = { workspace = true }
+
+[dev-dependencies]
+pollster = "1"

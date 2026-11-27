@@ -1,0 +1,78 @@
+@import "tailwindcss" source(none);
+@import "@n4/host-kit/timeline.css";
+@source "./index.html";
+@source "./index.ts";
+@source "../export/index.html";
+@source "../export/index.ts";
+
+@layer components {
+  .viewer-layout {
+    --header-height: 42px;
+    --transport-height: 38px;
+    --divider-height: 8px;
+    --preview-min-height: 120px;
+    --timeline-min-height: 160px;
+    grid-template-rows:
+      var(--header-height)
+      minmax(var(--preview-min-height), 1fr)
+      var(--transport-height)
+      var(--divider-height)
+      clamp(
+        var(--timeline-min-height),
+        var(--timeline-height, 38dvh),
+        calc(100% - var(--header-height) - var(--transport-height) - var(--divider-height) - var(--preview-min-height))
+      );
+  }
+
+  .viewer-toolbar {
+    @apply px-4;
+  }
+
+  .viewer-toolbar[data-window-chrome="inset"] {
+    padding-inline-start: 84px;
+    -webkit-app-region: drag;
+  }
+
+  .viewer-toolbar[data-window-chrome="inset"] .viewer-button {
+    -webkit-app-region: no-drag;
+  }
+
+  .viewer-divider {
+    @apply relative grid cursor-row-resize touch-none place-items-center bg-zinc-900;
+  }
+
+  .viewer-divider::before {
+    @apply absolute inset-x-0 top-1/2 h-px bg-zinc-700;
+    content: "";
+  }
+
+  .viewer-divider::after {
+    @apply relative h-0.5 w-8 rounded-full bg-zinc-500;
+    content: "";
+  }
+
+  .viewer-divider:is(:hover, :focus-visible, [data-dragging])::after {
+    background: #aad2f5;
+  }
+
+  .viewer-button {
+    @apply inline-flex h-7 shrink-0 items-center gap-2 rounded-md border border-zinc-600 bg-zinc-800 px-3 font-medium hover:enabled:bg-zinc-700 active:enabled:bg-zinc-600 disabled:opacity-50;
+  }
+
+  .viewer-button svg {
+    @apply size-3.5 shrink-0;
+  }
+
+  [data-role="editor-actions"][hidden] {
+    display: none;
+  }
+
+  [data-role="preview"][data-editable] {
+    cursor: crosshair;
+    touch-action: none;
+  }
+
+  :focus-visible {
+    outline: 2px solid #aad2f5;
+  }
+}

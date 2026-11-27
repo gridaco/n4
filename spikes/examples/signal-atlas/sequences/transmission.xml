@@ -1,0 +1,6 @@
+<sequence>
+  <rect name="Status light" x="40" y="33" width="12" height="12" corner-radius="6" fill="#f1713d">
+    <animate attributeName="opacity"><key frame="0" value="0.4"/><key frame="9" value="1"/><key frame="43" value="1"/><key frame="55" value="0.4"/></animate>
+  </rect>
+  <text name="Status" position="61 27" font="assets/N4GridSans.ttf" size="18" width="380" fill="#172e37"><copy>STATION  /  LIVE</copy></text>
+</sequence>

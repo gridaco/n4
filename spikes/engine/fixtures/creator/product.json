@@ -1,0 +1,76 @@
+{
+  "size": [
+    960,
+    540
+  ],
+  "fps": [
+    30,
+    1
+  ],
+  "shots": [
+    {
+      "source": "take-a.mp4",
+      "source_in": 0,
+      "duration": 180
+    }
+  ],
+  "title": {
+    "text": "Hear the take.",
+    "font": "../fonts/N4GridSans.ttf",
+    "font_size": 52,
+    "position": [
+      39,
+      151
+    ],
+    "width": 330,
+    "start": 0,
+    "fade_frames": 10
+  },
+  "graphics": [
+    {
+      "content": {
+        "type": "label",
+        "text": "SIDEBAND   /   AUDIO TOOLS",
+        "font": "../fonts/N4GridSans.ttf",
+        "size": 14,
+        "width": 320,
+        "rgb": [
+          202,
+          204,
+          250
+        ]
+      },
+      "position": [
+        43,
+        74
+      ]
+    },
+    {
+      "content": {
+        "type": "label",
+        "text": "Remove electrical hum from a recording in one switch.",
+        "font": "../fonts/N4GridSans.ttf",
+        "size": 22,
+        "width": 280,
+        "rgb": [
+          215,
+          218,
+          234
+        ]
+      },
+      "position": [
+        43,
+        364
+      ]
+    }
+  ],
+  "audio": [
+    {
+      "source": "take-a.wav",
+      "start_sample": 0,
+      "source_in_sample": 0,
+      "samples": 288000,
+      "gain": 0.9
+    }
+  ]
+}
