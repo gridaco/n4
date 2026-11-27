@@ -145,3 +145,43 @@ fn a_final_is_traced_once_and_only_scene_edits_trace_again() -> Result<()> {
     assert_eq!(found.rgba, first.rgba);
     Ok(())
 }
+
+#[test]
+fn a_parked_transport_presents_the_draft_and_then_its_final() -> Result<()> {
+    if let Some(reason) = Engine::path_trace_unavailable() {
+        eprintln!("skipped: {reason}");
+        return Ok(());
+    }
+    let root = tempfile::tempdir()?;
+    let store = tempfile::tempdir()?;
+    unsafe {
+        std::env::set_var("N4_CYCLES_DEVICE", "CPU");
+        std::env::set_var("N4_FINAL_STORE", store.path());
+    }
+    let transport =
+        n4_engine::transport::Transport::open(project(root.path(), "#20c0ff", "ONE", -0.36)?)?;
+    let next = || -> Result<n4_engine::Frame> {
+        for _ in 0..3_000 {
+            if let Some(frame) = transport.try_next()? {
+                return Ok(frame);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        anyhow::bail!("no picture arrived")
+    };
+    transport.seek(0)?;
+    let draft = next()?;
+    assert_eq!(draft.trace.graphics.path_traced_draft, 1);
+    let finished = next()?;
+    assert_eq!(finished.trace.request.timeline_frame, 0);
+    assert_eq!(finished.trace.graphics.path_traced_final, 1);
+    assert_ne!(finished.rgba, draft.rgba);
+    // Returning to the frame shows the Final at once, and nothing further follows.
+    transport.seek(1)?;
+    transport.seek(0)?;
+    let back = next()?;
+    assert_eq!(back.rgba, finished.rgba);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(transport.try_next()?.is_none());
+    Ok(())
+}

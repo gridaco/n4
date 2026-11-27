@@ -692,6 +692,19 @@ fn run(args: Args) -> Result<()> {
         let new_picture = frame.is_some();
         if let Some(frame) = frame {
             displayed_revision = frame.trace.revision;
+            // Say which picture of a path-traced scene this is; other pictures need no label.
+            let paint = &frame.trace.graphics;
+            let label = if paint.path_traced_draft > 0 {
+                match n4_engine::Engine::path_trace_unavailable() {
+                    None => " — Draft · tracing Final",
+                    Some(_) => " — Draft · no path tracer in this build",
+                }
+            } else if paint.path_traced_final > 0 {
+                " — Final"
+            } else {
+                ""
+            };
+            canvas.window_mut().set_title(&format!("{title}{label}"))?;
             if let Some(trial) = &mut reopen_trial {
                 trial.picture(&frame.rgba);
             }

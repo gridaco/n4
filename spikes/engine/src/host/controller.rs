@@ -44,6 +44,8 @@ pub struct Controller {
     sound: Option<Sound>,
     seeking: Option<u32>,
     upcoming: Option<Frame>,
+    /// The parked picture is a Draft of a path-traced scene and its Final may still arrive.
+    awaiting_final: bool,
 }
 
 impl Controller {
@@ -58,6 +60,7 @@ impl Controller {
             sound: None,
             seeking: None,
             upcoming: None,
+            awaiting_final: false,
         }
     }
     pub fn reopened(
@@ -132,6 +135,7 @@ impl Controller {
         if let Some(worker) = &self.transport {
             worker.seek(frame)?;
             self.seeking = Some(frame);
+            self.awaiting_final = false;
         }
         Ok(())
     }
@@ -227,13 +231,16 @@ impl Controller {
         };
         match self.mode {
             Mode::Parked | Mode::Dragging => {
-                if self.seeking.is_none() {
+                if self.seeking.is_none() && !self.awaiting_final {
                     return Ok(None);
                 }
                 let Some(frame) = worker.try_next()? else {
                     return Ok(None);
                 };
                 self.seeking = None;
+                // The transport follows a parked Draft with its Final for the same frame.
+                self.awaiting_final =
+                    !self.dragging() && frame.trace.graphics.path_traced_draft > 0;
                 if self.dragging() && self.cursor != frame.trace.request.timeline_frame {
                     self.seek(self.cursor)?;
                 }
