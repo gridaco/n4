@@ -55,6 +55,10 @@ A USD placement can rotate named rigid descendants about their imported local ax
 
 The surface has a transparent pixel canvas of its declared size. Its children use ordinary 2D layer ordering, text layout and authored clocks. The mesh UVs place that canvas on the model. The `unlit` role keeps the artwork independent of the key light. The `base-color` role lets the imported material's roughness and lighting shade the artwork as print. Both participate in scene visibility. The surface accepts independent video sources. Referencing the enclosing 3D scene or its primary footage inside the surface is rejected.
 
+A scene can instead be lit by lights another renderer can reproduce. `<rect-light center="x y z" aim="x y z" size="w h" intensity="11" color="#fff0dc"/>` is a one-sided rectangle in meters facing `aim`, emitting `intensity` as scene-linear radiance for white. `<ambient-light intensity="0.05"/>` adds constant light from every other direction. With a rect light present the analytic studio environment is not used; `<studio>` still supplies the shadow volume and exposure. A surface with `role="emissive"` is a screen: it is shown as authored times `emission`, and `glow` scales the light it casts on the rest of the scene.
+
+`<path-trace samples="64" bounces="8" clamp="10" denoise="true" seed="0"/>` asks for a path-traced Final. The rasterizer then draws the Draft from the same lights, without the screen's light, bounced light or occluded reflections. A path-traced scene holds USD models lit by rect and ambient lights; distant lights and text planes are rejected there. [Path-traced Final](../../../spatial/cycles/README.md)
+
 Studio environment rotation is in degrees, intensity is linear and exposure is in stops. Each accepts the existing scalar `<animate>` syntax. The first distant light casts the directional shadow. The shadow center and half-extent are in scene meters, bias in meters and softness in shadow-map texels. The studio render resolves to SDR before the following 2D layers. [Tested import profile](../../../spatial/openusd/PROFILE.md)
 
 ### Object mattes in a scene filter

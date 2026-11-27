@@ -15,6 +15,71 @@ pub(super) fn light(node: Element) -> Result<Value> {
     Ok(light)
 }
 
+pub(super) fn rect_light(node: Element) -> Result<Value> {
+    let mut light = simple(
+        node,
+        &[
+            ("center", "center", Triple),
+            ("aim", "aim", Triple),
+            ("size", "size", Pair),
+            ("intensity", "intensity", Number),
+            ("color", "color", Rgb),
+        ],
+    )?;
+    let obj = light.as_object_mut().unwrap();
+    ensure!(
+        ["center", "aim", "size"]
+            .iter()
+            .all(|k| obj.contains_key(*k)),
+        "rect-light requires center, aim and size"
+    );
+    obj.entry("intensity").or_insert(json!(1));
+    obj.entry("color").or_insert(json!([255, 255, 255]));
+    Ok(light)
+}
+
+pub(super) fn ambient(node: Element) -> Result<Value> {
+    let mut light = simple(
+        node,
+        &[("intensity", "intensity", Number), ("color", "color", Rgb)],
+    )?;
+    let obj = light.as_object_mut().unwrap();
+    obj.entry("intensity").or_insert(json!(1));
+    obj.entry("color").or_insert(json!([255, 255, 255]));
+    Ok(light)
+}
+
+pub(super) fn path_trace(node: Element) -> Result<Value> {
+    let mut attrs = Attrs::new(node)?;
+    let mut trace = Object::new();
+    attrs.read(
+        &mut trace,
+        &[
+            ("samples", "samples", Number),
+            ("bounces", "bounces", Number),
+            ("clamp", "clamp", Number),
+            ("seed", "seed", Number),
+        ],
+    )?;
+    let denoise = match attrs.take("denoise") {
+        None | Some("true") => true,
+        Some("false") => false,
+        Some(other) => bail!("path-trace denoise expects true or false, found {other:?}"),
+    };
+    attrs.finish()?;
+    ensure!(children(node)?.is_empty(), "path-trace has no children");
+    trace.insert("denoise".into(), denoise.into());
+    for (key, value) in [
+        ("samples", json!(64)),
+        ("bounces", json!(8)),
+        ("clamp", json!(10)),
+        ("seed", json!(0)),
+    ] {
+        trace.entry(key).or_insert(value);
+    }
+    Ok(trace.into())
+}
+
 pub(super) fn instance(node: Element) -> Result<Value> {
     let mut attrs = Attrs::new(node)?;
     let mut model = Object::new();
@@ -93,6 +158,8 @@ fn surface(node: Element) -> Result<Value> {
             ("slot", "slot", Str),
             ("role", "role", Str),
             ("size", "size", Pair),
+            ("emission", "emission", Number),
+            ("glow", "glow", Number),
         ],
     )?;
     attrs.finish()?;

@@ -4,8 +4,8 @@ use crate::graphics::{LiveSurface, ObjectMatte, Scene3d, SurfaceRole};
 use anyhow::{Context, Result};
 pub(super) use nothing_spatial_wgpu::matte_scratch_bytes;
 use nothing_spatial_wgpu::{
-    Geometry, Light, Matte, MatteOutput, MeshBuffers, Object, PartPose, Pose, Renderer, Studio,
-    SurfaceBinding, SurfaceMode, View,
+    Geometry, Light, Matte, MatteOutput, MeshBuffers, Object, PartPose, Pose, RectLight, Renderer,
+    Rig, Studio, SurfaceBinding, SurfaceMode, View,
 };
 use std::borrow::Cow;
 
@@ -62,6 +62,47 @@ fn linear(value: u8) -> f32 {
     } else {
         ((x + 0.055) / 1.055).powf(2.4)
     }
+}
+
+/// Authored rect lights as the renderers take them: a centre and two full edge vectors whose cross
+/// product is the emission direction. The long edge is horizontal.
+pub(crate) fn rect_lights(scene: &Scene3d) -> Vec<RectLight> {
+    scene
+        .rect_lights
+        .iter()
+        .map(|light| {
+            let center = light.center.map(f32::from);
+            let aim = light.aim.map(f32::from);
+            let n = unit(std::array::from_fn(|i| aim[i] - center[i]));
+            let up = if n[1].abs() > 0.999 {
+                [1., 0., 0.]
+            } else {
+                [0., 1., 0.]
+            };
+            let u = unit(cross(n, up));
+            let v = cross(n, u);
+            let [w, h] = light.size.map(f32::from);
+            RectLight {
+                center,
+                edge_u: u.map(|x| x * w),
+                edge_v: v.map(|x| x * h),
+                radiance: light.color.map(|c| linear(c) * f32::from(light.intensity)),
+            }
+        })
+        .collect()
+}
+
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn unit(a: [f32; 3]) -> [f32; 3] {
+    let l = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+    a.map(|x| x / l)
 }
 
 impl ScenePainter<'_> {
@@ -154,8 +195,9 @@ impl ScenePainter<'_> {
             let mut surfaces = Vec::with_capacity(model.surfaces.len());
             for surface in &model.surfaces {
                 let texture = self.live_surface(surface, frame)?;
+                // The rasterizer shows a screen as authored. Its light on the scene is Final's work.
                 let mode = match surface.role {
-                    SurfaceRole::Unlit => SurfaceMode::Unlit,
+                    SurfaceRole::Unlit | SurfaceRole::Emissive => SurfaceMode::Unlit,
                     SurfaceRole::BaseColor => SurfaceMode::BaseColor,
                 };
                 surfaces.push((surface.slot.as_str(), texture, mode));
@@ -193,7 +235,11 @@ impl ScenePainter<'_> {
         let mut objects = Vec::with_capacity(models.len() + planes.len());
         for ((id, key, pose, _, parts), surfaces) in models.iter().zip(&bindings) {
             let mesh = &self.cache.mesh_buffers[key];
-            let geometry = if scene.studio.is_some() || !surfaces.is_empty() || !parts.is_empty() {
+            let geometry = if scene.studio.is_some()
+                || !scene.rect_lights.is_empty()
+                || !surfaces.is_empty()
+                || !parts.is_empty()
+            {
                 Geometry::Model {
                     mesh,
                     surfaces,
@@ -253,20 +299,30 @@ impl ScenePainter<'_> {
             target,
             requests: &requests,
         });
-        if let Some(look) = &scene.studio {
+        let rects = rect_lights(scene);
+        let rig = (!rects.is_empty()).then(|| Rig {
+            rects: &rects,
+            ambient: scene.ambient.as_ref().map_or([0.; 3], |a| {
+                a.color.map(|v| linear(v) * f32::from(a.intensity))
+            }),
+        });
+        if scene.studio.is_some() || rig.is_some() {
             let sample = |channel: &crate::render::channels::AnimatedScalar<
                 crate::render::channels::Scalar,
             >| f32::from(channel.at(frame, self.time.fraction()));
-            let studio = Studio {
-                environment_rotation_degrees: sample(&look.environment_rotation),
-                environment_intensity: sample(&look.environment_intensity),
-                exposure_ev: sample(&look.exposure),
-                shadow_center: look.shadow_center.map(f32::from),
-                shadow_extent: look.shadow_extent.into(),
-                shadow_bias: look.shadow_bias.into(),
-                shadow_softness: look.shadow_softness.into(),
-            };
-            pass.renderer.record_studio(
+            let studio = scene
+                .studio
+                .as_ref()
+                .map_or_else(Studio::default, |look| Studio {
+                    environment_rotation_degrees: sample(&look.environment_rotation),
+                    environment_intensity: sample(&look.environment_intensity),
+                    exposure_ev: sample(&look.exposure),
+                    shadow_center: look.shadow_center.map(f32::from),
+                    shadow_extent: look.shadow_extent.into(),
+                    shadow_bias: look.shadow_bias.into(),
+                    shadow_softness: look.shadow_softness.into(),
+                });
+            pass.renderer.record_studio_rig(
                 self.commands,
                 &pass.output,
                 view,
@@ -274,6 +330,7 @@ impl ScenePainter<'_> {
                 &lights,
                 matte_output,
                 &studio,
+                rig.as_ref(),
             )?;
         } else {
             pass.renderer.record(
