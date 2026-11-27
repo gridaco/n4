@@ -1,0 +1,246 @@
+{
+ "machine": {
+  "model": "Apple M4 Pro",
+  "macos": "26.6"
+ },
+ "n4_sha256": "b9772da2d8da29b41c1aa21f12cd2abd644c449a97998fafb67bfcef0988f0db",
+ "size": [
+  1920,
+  1080
+ ],
+ "recipe": "64 samples, 8 bounces, denoised",
+ "frames": [
+  4,
+  25,
+  50
+ ],
+ "checks": {
+  "without --final the scene is a Draft": {
+   "pass": true,
+   "traced": 0,
+   "final": [
+    0,
+    0,
+    0
+   ],
+   "draft": [
+    1,
+    1,
+    1
+   ],
+   "seconds": [
+    0,
+    0,
+    0
+   ],
+   "wall": 0.89
+  },
+  "--final traces each frame once": {
+   "pass": true,
+   "traced": 3,
+   "final": [
+    1,
+    1,
+    1
+   ],
+   "draft": [
+    0,
+    0,
+    0
+   ],
+   "seconds": [
+    5.464,
+    4.7,
+    4.604
+   ],
+   "wall": 15.19
+  },
+  "draft and final differ": {
+   "pass": true,
+   "changed_pixels": [
+    1071157,
+    851322,
+    867878
+   ]
+  },
+  "a second process reuses stored pictures, in reverse order": {
+   "pass": true,
+   "traced": 0,
+   "final": [
+    1,
+    1,
+    1
+   ],
+   "draft": [
+    0,
+    0,
+    0
+   ],
+   "seconds": [
+    0.229,
+    0.208,
+    0.223
+   ],
+   "wall": 1.03,
+   "identical": true
+  },
+  "an ordinary render shows a stored Final": {
+   "pass": true,
+   "traced": 0,
+   "final": [
+    1,
+    1,
+    1
+   ],
+   "draft": [
+    0,
+    0,
+    0
+   ],
+   "seconds": [
+    0,
+    0,
+    0
+   ],
+   "wall": 1.02
+  },
+  "a cold re-render in reverse order is visually the same": {
+   "pass": true,
+   "largest_difference_of_255": 1,
+   "pixels_within_2": 1.0,
+   "traced": 3,
+   "final": [
+    1,
+    1,
+    1
+   ],
+   "draft": [
+    0,
+    0,
+    0
+   ],
+   "seconds": [
+    4.947,
+    4.676,
+    5.071
+   ],
+   "wall": 15.12
+  },
+  "a caption edit traces nothing": {
+   "pass": true,
+   "traced": 0,
+   "final": [
+    1,
+    1,
+    1
+   ],
+   "draft": [
+    0,
+    0,
+    0
+   ],
+   "seconds": [
+    0.241,
+    0.208,
+    0.208
+   ],
+   "wall": 1.03,
+   "changed_pixels": [
+    4469,
+    4469,
+    4469
+   ]
+  },
+  "a new word on the screen traces every frame that shows it": {
+   "pass": true,
+   "traced": 3,
+   "final": [
+    1,
+    1,
+    1
+   ],
+   "draft": [
+    0,
+    0,
+    0
+   ],
+   "seconds": [
+    5.441,
+    4.682,
+    4.621
+   ],
+   "wall": 15.15,
+   "changed_pixels": [
+    9737,
+    1635,
+    1359
+   ],
+   "changed_below_the_lid_on_frame_4": 1177
+  },
+  "slipping the footage three frames traces every frame": {
+   "pass": true,
+   "traced": 3,
+   "final": [
+    1,
+    1,
+    1
+   ],
+   "draft": [
+    0,
+    0,
+    0
+   ],
+   "seconds": [
+    5.455,
+    4.716,
+    4.653
+   ],
+   "wall": 15.24,
+   "changed_pixels": [
+    54745,
+    84650,
+    95057
+   ]
+  },
+  "moving the key light traces every frame": {
+   "pass": true,
+   "traced": 3,
+   "final": [
+    1,
+    1,
+    1
+   ],
+   "draft": [
+    0,
+    0,
+    0
+   ],
+   "seconds": [
+    5.477,
+    4.701,
+    4.623
+   ],
+   "wall": 15.23,
+   "changed_pixels": [
+    458289,
+    450396,
+    444507
+   ]
+  },
+  "the range is traced once, then exported from the store": {
+   "pass": true,
+   "finish": {
+    "seconds": 231.9,
+    "traced": 51,
+    "median_frame_seconds": 4.487,
+    "first_frame_seconds": 5.332
+   },
+   "export_seconds": 1.1,
+   "frames": 51,
+   "encoder_input_sha256": "30fb10ba356534d3b40c9aa31bddc1d434d85cd5d8025c320ac7564597fab5a8",
+   "second_export_same_input": true,
+   "store_megabytes": 403.4
+  }
+ },
+ "passed": true
+}
