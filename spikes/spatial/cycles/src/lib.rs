@@ -5,6 +5,8 @@ use anyhow::{Result, bail, ensure};
 use nothing_spatial::{Mesh, TextureChannel};
 use std::ffi::{CStr, CString};
 
+pub mod pose;
+
 mod sys {
     use std::ffi::c_char;
     #[repr(C)]

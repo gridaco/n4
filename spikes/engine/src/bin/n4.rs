@@ -92,6 +92,13 @@ enum Command {
         /// Change the authored paragraph width in pixels.
         #[arg(long)]
         title_width: Option<u32>,
+        /// Finish path-traced scenes with their authored recipe before writing each frame.
+        /// Without it such a scene is written as a rasterized Draft unless its Final is stored.
+        #[arg(long = "final")]
+        finished: bool,
+        /// Keep finished path-traced pictures in this directory and reuse the ones found there.
+        #[arg(long)]
+        final_store: Option<PathBuf>,
     },
 }
 
@@ -274,7 +281,17 @@ fn main() -> Result<()> {
             out,
             title_start,
             title_width,
-        } => render_images(project, frames, out, title_start, title_width),
+            finished,
+            final_store,
+        } => render_images(
+            project,
+            frames,
+            out,
+            title_start,
+            title_width,
+            finished,
+            final_store,
+        ),
     }
 }
 
@@ -417,6 +434,8 @@ fn render_images(
     out: PathBuf,
     title_start: Option<u32>,
     title_width: Option<u32>,
+    finished: bool,
+    final_store: Option<PathBuf>,
 ) -> Result<()> {
     ensure!(
         !out.exists(),
@@ -425,6 +444,9 @@ fn render_images(
     );
     let mut engine = Engine::new(Project::load(&project)?)?;
     engine.edit_title(title_start, title_width)?;
+    if let Some(directory) = final_store {
+        engine.persist_finals(directory)?;
+    }
     let parent = out
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -435,12 +457,21 @@ fn render_images(
         .with_context(|| format!("prepare output beside {}", out.display()))?;
     let mut results = Vec::new();
     for (i, number) in frames.into_iter().enumerate() {
-        let f = engine
-            .render(number)
-            .with_context(|| format!("render frame {number}"))?;
+        let started = std::time::Instant::now();
+        let (f, traced) = if finished {
+            engine.render_final(number)
+        } else {
+            engine.render(number).map(|f| (f, 0))
+        }
+        .with_context(|| format!("render frame {number}"))?;
         let name = format!("{i:03}-f{number:04}.png");
         save_png(&staging.path().join(&name), f.size, &f.rgba)?;
-        results.push(serde_json::json!({ "file": name, "trace": f.trace }));
+        let mut result = serde_json::json!({ "file": name, "trace": f.trace });
+        if finished {
+            result["path_traced_scenes"] = traced.into();
+            result["seconds"] = started.elapsed().as_secs_f64().into();
+        }
+        results.push(result);
     }
     let receipt = serde_json::json!({ "adapter": engine.adapter_name(), "frames": results });
     fs::write(

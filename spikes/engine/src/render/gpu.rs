@@ -1157,6 +1157,14 @@ impl Gpu {
         Ok(u64::from(bounds.width()) * u64::from(bounds.height()))
     }
 
+    /// Copy a finished RGBA8 texture to memory, outside any frame in progress.
+    pub(crate) fn read_texture(&self, texture: &wgpu::Texture) -> Result<Vec<u8>> {
+        self.readback(
+            self.device.create_command_encoder(&Default::default()),
+            texture,
+        )
+    }
+
     fn readback(
         &self,
         mut commands: wgpu::CommandEncoder,

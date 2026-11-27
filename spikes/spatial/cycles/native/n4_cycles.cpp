@@ -354,6 +354,12 @@ N4Cycles *n4c_create(const char *device, int32_t threads)
       dir = env;
     }
     path_init(dir, "");
+    /* Cycles grows its pool of in-flight paths to fit free memory: 5.7 GB on a 48 GB machine.
+     * Capping it at about a million paths cost 7% in time and kept the pool under 0.5 GB.
+     * A value already in the environment wins. */
+    setenv("CYCLES_CONCURRENT_STATES_MAX", "1048576", 0);
+    setenv("CYCLES_CONCURRENT_STATES_BASELINE", "1048576", 0);
+    setenv("CYCLES_CONCURRENT_STATES_MIN", "65536", 0);
   });
   try {
     auto s = std::make_unique<N4Cycles>();
@@ -371,8 +377,9 @@ N4Cycles *n4c_create(const char *device, int32_t threads)
       g_error = std::string("Cycles device not available: ") + device;
       return nullptr;
     }
-    /* N4_CYCLES_INTERACTIVE=1 selects Cycles' viewport scheduling: frequent in-progress pictures. */
-    s->params.background = getenv("N4_CYCLES_INTERACTIVE") == nullptr;
+    /* Background scheduling: the render ends at the sample count. Cycles' viewport scheduling
+     * never reports completion to a blocking caller. */
+    s->params.background = true;
     /* Not headless: Cycles then hands in-progress pictures to the output driver during a render. */
     s->params.headless = false;
     s->params.threads = threads;
@@ -804,7 +811,7 @@ void n4c_cancel(N4Cycles *s)
 
 float n4c_progress(N4Cycles *s)
 {
-  return s->session->get_progress();
+  return float(s->session->progress.get_progress());
 }
 
 int32_t n4c_snapshot_count(N4Cycles *s)

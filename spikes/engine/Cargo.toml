@@ -8,6 +8,8 @@ default-run = "n4"
 [features]
 default = ["openusd"]
 openusd = ["nothing-openusd/sdk"]
+# Path-traced Final through a provisioned Cycles bundle. See spatial/cycles/README.md.
+cycles = ["dep:nothing-spatial-cycles"]
 native-decode = []
 host-audio = ["dep:sdl2", "dep:getrandom"]
 device-probe = ["host-audio", "dep:egui"]
@@ -31,6 +33,7 @@ required-features = ["device-probe"]
 nothing-spatial = { path = "../spatial/scene" }
 nothing-openusd = { path = "../spatial/openusd", default-features = false }
 nothing-spatial-wgpu = { path = "../spatial/wgpu" }
+nothing-spatial-cycles = { path = "../spatial/cycles", optional = true }
 anyhow = "1"
 getrandom = { version = "0.4", optional = true }
 clap = { version = "4", features = ["derive"] }

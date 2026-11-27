@@ -43,5 +43,6 @@ cd spikes
 - Include `scene/shader.h` before `scene/background.h`. Otherwise `Background::set_shader` binds to a `bool` overload and the next update crashes.
 - Without an OpenColorIO configuration Cycles converts 8-bit sRGB textures through a half-float path. The bridge decodes to linear floats itself.
 - A rect light's strength with `normalize` off is radiance times pi.
-- Cycles did not deliver in-progress pictures to the output driver during a render in either of its scheduling modes. `Monitor::snapshots` therefore stays at zero today.
+- In-progress pictures arrive through `Monitor::snapshot` only when the session is not headless (the bridge sets this). On the Field Unit shot the first arrived 0.07 s into a render. Cycles' viewport scheduling (`background = false`) never returns to a blocking caller; do not use it.
+- `Session::get_progress` is declared by Cycles but not defined; use `progress.get_progress()`. A link failure here is easy to miss when filtering build output for compile errors.
 - Re-renders are not bit-identical: on a 51-frame range no frame matched, though no pixel differed by more than 2 of 255 after the finish.

@@ -695,6 +695,7 @@ dependencies = [
  "libc",
  "nothing-openusd",
  "nothing-spatial",
+ "nothing-spatial-cycles",
  "nothing-spatial-wgpu",
  "objc2-metal",
  "png",

@@ -10,6 +10,12 @@ fn main() {
         );
         println!("cargo:rustc-cfg=n4_openusd");
     }
+    if let Some(libdir) = std::env::var_os("DEP_N4CYCLES_LIBDIR") {
+        println!(
+            "cargo:rustc-link-arg=-Wl,-rpath,{}",
+            PathBuf::from(libdir).display()
+        );
+    }
     println!("cargo:rerun-if-changed=native/video_decoder.c");
     if std::env::var_os("CARGO_FEATURE_NATIVE_DECODE").is_none() {
         return;

@@ -46,6 +46,7 @@ pub struct Engine {
     reader: media::VideoReader,
     paragraph: Option<text::Paragraph>,
     graphics: graphics::PaintCache,
+    path_tracer: render::path_trace::PathTracer,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -109,6 +110,7 @@ impl Engine {
             reader: Default::default(),
             paragraph: None,
             graphics,
+            path_tracer: Default::default(),
         })
     }
 
@@ -229,8 +231,54 @@ impl Engine {
         self.replace_project(next)
     }
 
+    /// Render a picture now. A path-traced scene is shown from its finished Final when one
+    /// exists, and otherwise as a rasterized Draft; `trace.graphics.path_traced_draft` counts
+    /// those, so a presenter can label the picture.
     pub fn render(&mut self, frame: u32) -> Result<Frame> {
+        self.graphics.finals.take_pending();
         self.render_view(frame, None)
+    }
+
+    /// Why this build cannot finish a path-traced scene, or `None` when it can.
+    pub fn path_trace_unavailable() -> Option<&'static str> {
+        render::path_trace::unavailable()
+    }
+
+    /// Keep finished path-traced pictures in a directory, so they outlive this engine.
+    pub fn persist_finals(&mut self, directory: PathBuf) -> Result<()> {
+        self.graphics.finals.persist_in(directory)
+    }
+
+    /// Render a picture whose path-traced scenes are all Final, tracing any that are missing
+    /// with the recipe authored on the scene. The result does not depend on what was rendered
+    /// before. Returns the picture and the number of scenes traced by this call.
+    pub fn render_final(&mut self, frame: u32) -> Result<(Frame, u32)> {
+        let mut traced = 0;
+        // A traced scene can sit behind another one only a few levels deep.
+        for _ in 0..4 {
+            let picture = self.render(frame)?;
+            let pending = self.graphics.finals.take_pending();
+            if pending.is_empty() {
+                return Ok((picture, traced));
+            }
+            for request in pending {
+                let mut artwork = Vec::with_capacity(request.models.len());
+                for model in &request.models {
+                    let mut pixels = Vec::with_capacity(model.surfaces.len());
+                    for surface in &model.surfaces {
+                        pixels.push(self.gpu.read_texture(&surface.texture)?);
+                    }
+                    artwork.push(pixels);
+                }
+                let finished = self
+                    .path_tracer
+                    .render(&request, &self.graphics.meshes, artwork)
+                    .context("path-traced Final")?;
+                self.graphics.finals.insert(request.key, finished)?;
+                traced += 1;
+            }
+        }
+        anyhow::bail!("path-traced scenes did not settle at frame {frame}")
     }
 
     /// Reconstruct trace metadata for a picture whose pixels survived a revision.
