@@ -25,6 +25,11 @@ struct Material {
 @group(0) @binding(2) var shadow_map: texture_depth_2d;
 @group(0) @binding(3) var shadow_comparison: sampler_comparison;
 @group(0) @binding(4) var owners: texture_multisampled_2d<f32>;
+// rig[0] is a header: center = ambient radiance and rect count, u.x = whether rect 0 is shadowed.
+struct Rect {
+    center: vec4f, u: vec4f, v: vec4f, radiance: vec4f
+}
+@group(0) @binding(5) var<storage, read> rig: array<Rect>;
 @group(1) @binding(0) var<uniform> pose: Pose;
 @group(1) @binding(1) var<uniform> material: Material;
 @group(1) @binding(2) var base_image: texture_2d<f32>;
@@ -181,6 +186,68 @@ fn specular(nh: f32, nv: f32, nl: f32, hv: f32, r: f32, f0: vec3f) -> vec3f {
     return aa / (3.14159 * d * d) * g * (f0 + (1. - f0) * pow(1. - hv, 5.));
 }
 
+// One-sided rect light. Diffuse uses the exact unoccluded polygon form factor. Specular uses the
+// point on the rectangle nearest the mirror direction, with the lobe widened by the light's size.
+// Neither accounts for occlusion; the caller applies the shadow map to one light.
+fn rect_light(r: Rect, p: vec3f, n: vec3f, eye: vec3f, nv: f32, diffuse: vec3f, f0: vec3f, rough: f32, coat: vec2f, cap: vec3f) -> vec3f {
+    let facing = normalize(cross(r.u.xyz, r.v.xyz));
+    let c = r.center.xyz - p;
+    if (dot(c, facing) >= 0.) {
+        return vec3f(0.);
+    }
+    let hu = .5 * r.u.xyz;
+    let hv = .5 * r.v.xyz;
+    let q = array<vec3f, 4>(normalize(c - hu - hv), normalize(c + hu - hv), normalize(c + hu + hv), normalize(c - hu + hv));
+    var vector = vec3f(0.);
+    for (var i = 0u;i<4u;i++) {
+        let a = q[i];
+        let b = q[(i + 1u) % 4u];
+        let x = cross(a, b);
+        let len = length(x);
+        if (len>1e-6) {
+            vector += acos(clamp(dot(a, b), -1., 1.)) * x / len;
+        }
+    }
+    vector *= select(-1., 1., dot(vector, c) >= 0.);
+    let form = max(dot(vector, n), 0.) / 6.28318;
+    var value = diffuse * form;
+
+    let lu = length(hu);
+    let lv = length(hv);
+    let du = hu / lu;
+    let dv = hv / lv;
+    let mirror = reflect(-eye, n);
+    let denom = dot(mirror, facing);
+    var hit = mirror * length(c);
+    if (denom < -1e-4) {
+        hit = mirror * (dot(c, facing) / denom);
+    }
+    let rel = hit - c;
+    let point = c + du * clamp(dot(rel, du), -lu, lu) + dv * clamp(dot(rel, dv), -lv, lv);
+    let d2 = max(dot(point, point), 1e-8);
+    let l = point * inverseSqrt(d2);
+    let nl = max(dot(n, l), 0.);
+    if (nl>0.) {
+        let area = 4. * lu * lv;
+        let solid = min(area * max(dot(-l, facing), 0.) / d2, 6.28318);
+        let h = unit(eye + l, n);
+        let nh = max(dot(n, h), 0.);
+        let hv2 = clamp(dot(h, eye), 0., 1.);
+        // Representative-point area light: evaluate the surface's own lobe toward the nearest point
+        // of the rectangle, and scale by (a / a')^2 so the peak drops as the source grows.
+        let spread = sqrt(area) / (3. * sqrt(d2));
+        let a0 = max(rough * rough, .0042);
+        let norm = square(a0 / clamp(a0 + spread, 0., 1.));
+        let c0 = max(coat.y * coat.y, .0042);
+        let coat_norm = square(c0 / clamp(c0 + spread, 0., 1.));
+        // A light that fills the whole lobe reflects at most the surface's reflectance, as the
+        // ambient term does.
+        let lobe = solid * nl * (norm * specular(nh, nv, nl, hv2, rough, f0) + coat_norm * coat.x * specular(nh, nv, nl, hv2, coat.y, vec3f(.04)));
+        value += min(lobe, cap);
+    }
+    return r.radiance.xyz * value;
+}
+
 struct Ink {
     @location(0) color: vec4f, @builtin(sample_mask) mask: u32
 }
@@ -240,7 +307,23 @@ fn shade(s: Surface) -> Ink {
     let nv = max(dot(n, eye), .001);
     let reflected = reflect(-eye, n);
     let fresnel = f0 + (max(vec3f(1. - rough), f0) - f0) * pow(1. - nv, 5.);
-    var value = material.emission_metal.xyz + ao * (diffuse * (.07 + scene.environment.z * (.12 + .17 * max(n.y, 0.))) + fresnel * environment(reflected, rough));
+    var value = material.emission_metal.xyz;
+    if (scene.environment.w>.5) {
+        // A rig replaces the analytic studio: constant ambient radiance, then each rect light.
+        value += ao * rig[0].center.xyz * (diffuse + fresnel);
+        let count = u32(rig[0].center.w);
+        for (var i = 0u;i<count;i++) {
+            var visibility = 1.;
+            if (i == 0u && rig[0].u.x>.5) {
+                let toward = unit(rig[1].center.xyz - s.world, n);
+                visibility = shadow_visibility(s.world, unit(cross(dx, dy), n), max(dot(n, toward), 0.));
+            }
+            value += visibility * rect_light(rig[i + 1u], s.world, n, eye, nv, diffuse, f0, rough, material.coat.xy, fresnel);
+        }
+    }
+    else {
+        value += ao * (diffuse * (.07 + scene.environment.z * (.12 + .17 * max(n.y, 0.))) + fresnel * environment(reflected, rough));
+    }
     for (var i = 0u;i<arrayLength(&lights);i++) {
         let l = lights[i];
         let nl = max(dot(n, l.direction.xyz), 0.);

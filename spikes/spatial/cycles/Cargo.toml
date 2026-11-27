@@ -1,0 +1,26 @@
+[package]
+name = "nothing-spatial-cycles"
+version = "0.0.0"
+edition = "2024"
+publish = false
+links = "n4cycles"
+
+[features]
+# Fail the build when the Cycles bundle is missing, for jobs that must exercise the bridge.
+require-sdk = []
+
+[dependencies]
+anyhow = "1"
+nothing-spatial = { path = "../scene" }
+
+[dev-dependencies]
+image = { version = "0.25", default-features = false, features = ["png"] }
+nothing-openusd = { path = "../openusd" }
+nothing-spatial-wgpu = { path = "../wgpu" }
+pollster = "1"
+serde_json = "1"
+wgpu = { workspace = true }
+
+[[example]]
+name = "spike"
+path = "examples/spike/main.rs"

@@ -31,6 +31,27 @@ impl Default for Studio {
         }
     }
 }
+/// A rectangular area light. It emits `radiance` from one face, along cross(edge_u, edge_v).
+#[derive(Clone, Copy, Debug)]
+pub struct RectLight {
+    pub center: [f32; 3],
+    /// Full edge vectors, perpendicular to each other.
+    pub edge_u: [f32; 3],
+    pub edge_v: [f32; 3],
+    /// Scene-linear emitted radiance.
+    pub radiance: [f32; 3],
+}
+
+/// Lights that another renderer can reproduce. When a rig is supplied it replaces the analytic
+/// studio environment and its built-in ambient term. The first rect casts the shadow map, aimed
+/// at `Studio::shadow_center`, unless a distant light is present.
+#[derive(Clone, Copy, Debug)]
+pub struct Rig<'a> {
+    pub rects: &'a [RectLight],
+    /// Constant radiance arriving from every direction not covered by a light.
+    pub ambient: [f32; 3],
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum SurfaceMode {
     /// Composite the artwork into the material's linear base color; transparent lettering reveals the underlying paint.
@@ -358,6 +379,7 @@ impl StudioRenderer {
                     BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
                     f,
                 ),
+                (5, buf(BufferBindingType::Storage { read_only: true }), f),
             ],
         );
         let ownership_layout = layout(
@@ -696,6 +718,31 @@ impl Renderer {
         matte_output: Option<MatteOutput<'_>>,
         studio: &Studio,
     ) -> Result<()> {
+        self.record_studio_rig(
+            encoder,
+            target,
+            camera,
+            objects,
+            lights,
+            matte_output,
+            studio,
+            None,
+        )
+    }
+
+    /// As `record_studio`, with an optional rig of rect lights and constant ambient light.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_studio_rig(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::Texture,
+        camera: View,
+        objects: &[Object<'_>],
+        lights: &[Light],
+        matte_output: Option<MatteOutput<'_>>,
+        studio: &Studio,
+        rig: Option<&Rig<'_>>,
+    ) -> Result<()> {
         validate_view(target, camera, matte_output.as_ref())?;
         ensure!(
             studio.shadow_extent.is_finite()
@@ -719,7 +766,16 @@ impl Renderer {
         pipeline.prepare(d, target.size(), !mattes.is_empty(), need_owners);
         let t = pipeline.targets.as_ref().unwrap();
         let draws = pipeline.draws(d, objects)?;
-        let sun = normalized(lights.first().map_or([0., -1., 0.], |l| l.direction))?;
+        // The shadow map follows the first distant light, or else the first rect of the rig.
+        let rect_key = rig
+            .and_then(|r| r.rects.first())
+            .filter(|_| lights.is_empty());
+        let shadowed = !lights.is_empty() || rect_key.is_some();
+        let sun = normalized(match (lights.first(), rect_key) {
+            (Some(l), _) => l.direction,
+            (None, Some(r)) => std::array::from_fn(|i| studio.shadow_center[i] - r.center[i]),
+            (None, None) => [0., -1., 0.],
+        })?;
         let up = if sun[1].abs() > 0.95 {
             [0., 0., 1.]
         } else {
@@ -747,8 +803,8 @@ impl Renderer {
                 four(studio.shadow_center, studio.shadow_extent),
                 four(sx, studio.shadow_bias),
                 four(sy, studio.shadow_softness),
-                four(sun, f32::from(!lights.is_empty())),
-                [c, s, studio.environment_intensity, 0.],
+                four(sun, f32::from(shadowed)),
+                [c, s, studio.environment_intensity, f32::from(rig.is_some())],
             ],
         );
         let mut values = Vec::new();
@@ -765,8 +821,26 @@ impl Renderer {
             wgpu::BufferUsages::STORAGE,
             &float_bytes(values),
         );
+        // Element 0 is a header: ambient radiance, rect count, and whether rect 0 is shadowed.
+        let mut rig_values = Vec::new();
+        let rects = rig.map_or(&[][..], |r| r.rects);
+        rig_values.extend(four(rig.map_or([0.; 3], |r| r.ambient), rects.len() as f32));
+        rig_values.extend([f32::from(rect_key.is_some()), 0., 0., 0.]);
+        rig_values.extend([0.; 8]);
+        for r in rects {
+            rig_values.extend(four(r.center, 0.));
+            rig_values.extend(four(r.edge_u, 0.));
+            rig_values.extend(four(r.edge_v, 0.));
+            rig_values.extend(four(r.radiance, 0.));
+        }
+        let rig_buffer = buffer(
+            d,
+            "studio rig",
+            wgpu::BufferUsages::STORAGE,
+            &float_bytes(rig_values),
+        );
         let viewpoint = group(d, &pipeline.view_layout, &[binding(0, &view)]);
-        if !lights.is_empty() {
+        if shadowed {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("key light depth"),
                 depth_stencil_attachment: Some(depth_target(&pipeline.shadow_map, 1., true)),
@@ -786,6 +860,7 @@ impl Renderer {
                 binding(1, &light_buffer),
                 texture(2, &pipeline.shadow_map),
                 sampler(3, &pipeline.shadow_sampler),
+                binding(5, &rig_buffer),
             ],
         );
         let owner_code = |id: Option<&str>| {
