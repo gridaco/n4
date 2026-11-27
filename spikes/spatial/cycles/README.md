@@ -1,6 +1,6 @@
 # nothing-spatial-cycles
 
-A long-lived [Cycles](https://www.cycles-renderer.org/) session fed from `nothing-spatial` data. N4 uses it as the path-traced Final renderer for a shot that asks for one; the [wgpu rasterizer](../wgpu/src/lib.rs) remains the Draft and the Final for every other shot.
+A long-lived [Cycles](https://www.cycles-renderer.org/) session fed from `nothing-spatial` data. N4 uses it as the path-traced Final renderer for a shot that asks for one; the [wgpu rasterizer](../wgpu/src/lib.rs) remains the Draft and the Final for every other shot. [RFC 0009](../../rfcs/0009-path-traced-final.md)
 
 - [`native/`](native/n4_cycles.h): a C interface over Cycles' C++ scene and session classes.
 - [`patches/`](patches): five lines that let the Cycles build compile `native/` as a shared library. Cycles' sources are otherwise untouched.

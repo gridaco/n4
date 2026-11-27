@@ -8,6 +8,7 @@ Use the current contracts when implementing a reader, renderer or host. The rese
 | [Editor session](../spikes/rfcs/0008-editor-session.md) | Revision-scoped selection, geometry and picking, HUD, history, conflict detection and save | [Command-pipe tests](../spikes/engine/tests/editor_cli.rs), [geometry tests](../spikes/engine/tests/editor_geometry.rs) |
 | [Host and live refresh](../spikes/host/README.md) | A persistent native session, frame delivery and return, input watching, independent output and thumbnail damage | [Wire client](../spikes/host/kit/src/client), [selective invalidation](../spikes/host/test/selective-invalidation.mjs) |
 | [Spatial profile](../spikes/spatial/README.md) | Shared 2D/3D depth, imported geometry and materials, scene integration and current coverage | [OpenUSD import profile](../spikes/spatial/openusd/PROFILE.md), [headless GPU host](../spikes/spatial/wgpu/examples/headless.rs) |
+| [Path-traced Final](../spikes/rfcs/0009-path-traced-final.md) | Draft and Final for a spatial scene, the identity of a finished picture, range rendering and export through an optional Cycles bridge | [Engine tests](../spikes/engine/tests/path_trace.rs), [qualification script](../spikes/spatial/cycles/tools/qualify.py) |
 
 ## Decisions and open questions
 
