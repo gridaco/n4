@@ -122,6 +122,21 @@ fn a_final_is_traced_once_and_only_scene_edits_trace_again() -> Result<()> {
         "a moved light is a new picture"
     );
 
+    // Export delivers Finals: it traces what is missing and afterwards nothing is left to trace.
+    let movie = root.path().join("film.mp4");
+    let report = n4_engine::export::write_mp4(&mut engine, &movie)?;
+    assert_eq!(
+        engine.render_final(1)?.1,
+        0,
+        "export traced and kept frame 1"
+    );
+    let again = root.path().join("again.mp4");
+    let repeat = n4_engine::export::write_mp4(&mut engine, &again)?;
+    assert_eq!(
+        repeat.rgba_sha256, report.rgba_sha256,
+        "a second export feeds the encoder the same stored pictures"
+    );
+
     // A second engine over the same store finds the pictures without tracing.
     let mut reopened = Engine::new(project(root.path(), "#20c0ff", "ONE", -0.36)?)?;
     reopened.persist_finals(store.path().to_path_buf())?;

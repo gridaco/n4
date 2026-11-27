@@ -87,6 +87,9 @@ pub(crate) fn part_rotation(frame: &[[f32; 4]; 4], pivot: V3, deg: V3) -> M34 {
     mul(&mul(&f, &r), &inv)
 }
 
+/// Set by commands that watch a render in progress.
+static SNAPSHOTS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 struct Model {
     mesh: Mesh,
     materials: Vec<MaterialId>,
@@ -144,7 +147,11 @@ impl Shot {
         let ground_mesh = nothing_openusd::load(&asset, spec["ground"].as_str().unwrap())?;
         timings["import_seconds"] = json!(t.elapsed().as_secs_f64());
         let t = Instant::now();
-        let mut session = Session::new(device, 0)?;
+        let mut session = if SNAPSHOTS.load(std::sync::atomic::Ordering::Relaxed) {
+            Session::with_snapshots(device, 0)?
+        } else {
+            Session::new(device, 0)?
+        };
         timings["session_create_seconds"] = json!(t.elapsed().as_secs_f64());
         timings["device"] = json!(session.device());
 
@@ -690,6 +697,7 @@ fn features(args: &[String]) -> Result<()> {
     let shot_path = PathBuf::from(arg(args, "--shot").context("--shot")?);
     let out = PathBuf::from(arg(args, "--out").context("--out")?);
     std::fs::create_dir_all(&out)?;
+    SNAPSHOTS.store(true, std::sync::atomic::Ordering::Relaxed);
     let mut receipt = json!({});
     let mut shot = Shot::open(
         &shot_path,

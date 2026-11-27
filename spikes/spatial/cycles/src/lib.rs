@@ -59,7 +59,7 @@ mod sys {
     }
     #[cfg(cycles_sdk)]
     unsafe extern "C" {
-        pub fn n4c_create(device: *const c_char, threads: i32) -> *mut N4Cycles;
+        pub fn n4c_create(device: *const c_char, threads: i32, snapshots: i32) -> *mut N4Cycles;
         pub fn n4c_destroy(s: *mut N4Cycles);
         pub fn n4c_last_error() -> *const c_char;
         pub fn n4c_device_description(s: *mut N4Cycles) -> *const c_char;
@@ -141,7 +141,11 @@ mod sys {
     #[cfg(not(cycles_sdk))]
     mod absent {
         use super::*;
-        pub unsafe fn n4c_create(_device: *const c_char, _threads: i32) -> *mut N4Cycles {
+        pub unsafe fn n4c_create(
+            _device: *const c_char,
+            _threads: i32,
+            _snapshots: i32,
+        ) -> *mut N4Cycles {
             std::ptr::null_mut()
         }
         pub unsafe fn n4c_destroy(_s: *mut N4Cycles) {}
@@ -401,8 +405,18 @@ fn channel(c: TextureChannel) -> i32 {
 impl Session {
     /// `device` is "METAL" or "CPU". `threads` 0 lets Cycles choose.
     pub fn new(device: &str, threads: u32) -> Result<Self> {
+        Self::create(device, threads, false)
+    }
+
+    /// As `new`, and renders also deliver in-progress pictures to `Monitor::snapshot`. Cycles
+    /// then denoises and reads back intermediate results, so each frame takes longer.
+    pub fn with_snapshots(device: &str, threads: u32) -> Result<Self> {
+        Self::create(device, threads, true)
+    }
+
+    fn create(device: &str, threads: u32, snapshots: bool) -> Result<Self> {
         let name = CString::new(device)?;
-        let raw = unsafe { sys::n4c_create(name.as_ptr(), threads as i32) };
+        let raw = unsafe { sys::n4c_create(name.as_ptr(), threads as i32, snapshots as i32) };
         ensure!(!raw.is_null(), "{}", last_error());
         Ok(Self {
             raw,

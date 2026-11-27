@@ -9,6 +9,26 @@ use std::sync::Arc;
 
 pub(crate) type Meshes = HashMap<(PathBuf, String), Arc<Mesh>>;
 
+/// Stops a path-traced render in flight from another thread. The interrupted call returns an
+/// error and the tracer stays usable.
+#[derive(Clone, Default)]
+pub struct FinalCancel(Arc<CancelState>);
+
+#[derive(Default)]
+struct CancelState {
+    #[cfg(feature = "cycles")]
+    monitor: std::sync::Mutex<Option<nothing_spatial_cycles::Monitor>>,
+}
+
+impl FinalCancel {
+    pub fn cancel(&self) {
+        #[cfg(feature = "cycles")]
+        if let Some(monitor) = *self.0.monitor.lock().unwrap() {
+            monitor.cancel();
+        }
+    }
+}
+
 /// Why a path-traced scene cannot be finished in this build, or `None` when it can.
 pub(crate) fn unavailable() -> Option<&'static str> {
     #[cfg(feature = "cycles")]
@@ -73,6 +93,10 @@ mod cycles {
         session: Session,
         models: Vec<Model>,
         lights: Vec<LightId>,
+        /// What the session was last given. Re-sending an unchanged light or background makes
+        /// Cycles rebuild its light tree or recompile the background shader for nothing.
+        rects: Vec<[[f32; 3]; 4]>,
+        ambient: Option<[f32; 3]>,
     }
 
     /// Live Cycles sessions, one per set of models and surface roles. Geometry and materials are
@@ -80,6 +104,7 @@ mod cycles {
     #[derive(Default)]
     pub(crate) struct PathTracer {
         scenes: Vec<Scene>,
+        cancel: FinalCancel,
     }
 
     /// What must be rebuilt rather than updated when it changes.
@@ -100,6 +125,10 @@ mod cycles {
         }
         request.rects.len().hash(&mut h);
         h.finish()
+    }
+
+    fn rect_values(r: &crate::graphics::FinalRect) -> [[f32; 3]; 4] {
+        [r.center, r.edge_u, r.edge_v, r.radiance]
     }
 
     /// Live surfaces are premultiplied sRGB; Cycles takes unassociated pixels.
@@ -181,6 +210,8 @@ mod cycles {
                 session,
                 models,
                 lights,
+                rects: request.rects.iter().map(rect_values).collect(),
+                ambient: None,
             })
         }
 
@@ -196,6 +227,10 @@ mod cycles {
     }
 
     impl PathTracer {
+        pub(crate) fn canceller(&self) -> FinalCancel {
+            self.cancel.clone()
+        }
+
         /// `artwork[m][s]` holds the read-back pixels of model m's surface s.
         pub(crate) fn render(
             &mut self,
@@ -231,12 +266,22 @@ mod cycles {
                 }
                 let _ = &scene.models[m].materials;
             }
-            for (light, r) in scene.lights.iter().zip(&request.rects) {
-                scene
-                    .session
-                    .update_rect_light(*light, r.center, r.edge_u, r.edge_v, r.radiance);
+            for (i, r) in request.rects.iter().enumerate() {
+                if scene.rects[i] != rect_values(r) {
+                    scene.session.update_rect_light(
+                        scene.lights[i],
+                        r.center,
+                        r.edge_u,
+                        r.edge_v,
+                        r.radiance,
+                    );
+                    scene.rects[i] = rect_values(r);
+                }
             }
-            scene.session.background(request.ambient, true);
+            if scene.ambient != Some(request.ambient) {
+                scene.session.background(request.ambient, true);
+                scene.ambient = Some(request.ambient);
+            }
             let [x, y, z] = pose::axes(request.camera_rotation_degrees);
             scene.session.camera(
                 request.camera_position,
@@ -264,7 +309,10 @@ mod cycles {
                 // A frame's sample pattern follows from its identity, never from render order.
                 seed: (request.recipe.seed ^ request.key.0 as u32) & 0x7fff_ffff,
             };
-            let frame = scene.session.render(request.size, &recipe, &ids)?;
+            *self.cancel.0.monitor.lock().unwrap() = Some(scene.session.monitor());
+            let frame = scene.session.render(request.size, &recipe, &ids);
+            *self.cancel.0.monitor.lock().unwrap() = None;
+            let frame = frame?;
             ensure!(
                 frame.color.len() == (request.size[0] * request.size[1] * 4) as usize,
                 "Cycles returned an unexpected picture size"
@@ -295,6 +343,10 @@ pub(crate) struct PathTracer;
 
 #[cfg(not(feature = "cycles"))]
 impl PathTracer {
+    pub(crate) fn canceller(&self) -> FinalCancel {
+        FinalCancel::default()
+    }
+
     pub(crate) fn render(
         &mut self,
         _: &FinalRequest,

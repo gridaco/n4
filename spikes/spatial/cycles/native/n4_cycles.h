@@ -33,8 +33,10 @@ typedef struct {
   float glow_scale;     /* extra multiplier on paths that do not start at the camera */
 } N4Material;
 
-/* device: "METAL" or "CPU". Returns null on failure; n4c_last_error explains. */
-N4Cycles *n4c_create(const char *device, int32_t threads);
+/* device: "METAL" or "CPU". With `snapshots`, Cycles hands over in-progress pictures during a
+ * render; it then denoises and reads back intermediate results, which cost about 0.6 s on a
+ * 64-sample 1080p frame. Returns null on failure; n4c_last_error explains. */
+N4Cycles *n4c_create(const char *device, int32_t threads, int32_t snapshots);
 void n4c_destroy(N4Cycles *s);
 const char *n4c_last_error(void);
 const char *n4c_device_description(N4Cycles *s);

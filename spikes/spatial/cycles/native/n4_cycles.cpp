@@ -338,7 +338,7 @@ const char *n4c_last_error(void)
   return g_error.c_str();
 }
 
-N4Cycles *n4c_create(const char *device, int32_t threads)
+N4Cycles *n4c_create(const char *device, int32_t threads, int32_t snapshots)
 {
   static std::once_flag once;
   std::call_once(once, [] {
@@ -380,8 +380,8 @@ N4Cycles *n4c_create(const char *device, int32_t threads)
     /* Background scheduling: the render ends at the sample count. Cycles' viewport scheduling
      * never reports completion to a blocking caller. */
     s->params.background = true;
-    /* Not headless: Cycles then hands in-progress pictures to the output driver during a render. */
-    s->params.headless = false;
+    /* Fixed for the session: Cycles reads it when it builds its scheduler. */
+    s->params.headless = snapshots == 0;
     s->params.threads = threads;
     s->params.use_auto_tile = false;
     s->params.tile_size = 0;

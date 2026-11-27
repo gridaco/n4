@@ -35,6 +35,7 @@ pub use project::{
     AuthoringDocument, Background, Backplate, FrameRate, GraphicsPlacement, OccurrenceRanges,
     OutputDamage, Project, ProjectDamage, RevisionChange, Shot, TimelineChange, Title,
 };
+pub use render::path_trace::FinalCancel;
 
 pub(crate) const MAX_SURFACE_DIMENSION: u32 = 8192;
 
@@ -247,6 +248,23 @@ impl Engine {
     /// Keep finished path-traced pictures in a directory, so they outlive this engine.
     pub fn persist_finals(&mut self, directory: PathBuf) -> Result<()> {
         self.graphics.finals.persist_in(directory)
+    }
+
+    /// Keep them in the user's cache, shared by every project and host on this machine. Keys
+    /// describe content, so a copy of a project finds the same pictures. `N4_FINAL_STORE` names
+    /// another directory.
+    pub fn persist_finals_in_user_cache(&mut self) -> Result<()> {
+        let directory = match std::env::var_os("N4_FINAL_STORE") {
+            Some(directory) => PathBuf::from(directory),
+            None => PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?)
+                .join("Library/Caches/n4/final"),
+        };
+        self.persist_finals(directory)
+    }
+
+    /// A handle that interrupts `render_final` from another thread.
+    pub fn final_cancel(&self) -> FinalCancel {
+        self.path_tracer.canceller()
     }
 
     /// Render a picture whose path-traced scenes are all Final, tracing any that are missing

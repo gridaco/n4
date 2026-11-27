@@ -17,6 +17,12 @@ play project *args:
 inspect project *args:
     @exec {{quote(justfile_directory() / "spikes/engine/Play Timeline.command")}} --inspector "$@"
 
+# Trace the Final of a project's path-traced scenes into the user cache, e.g. just finish .local/examples/my-shot --frames 0..48
+[no-cd]
+finish project *args:
+    @cd {{quote(justfile_directory() / "spikes/engine")}} && cargo build --locked --release --features cycles --bin n4
+    @exec {{quote(justfile_directory() / "spikes/engine/target/release/n4")}} finish "$@"
+
 # Build the headless host and command-line renderer.
 host-native:
     @cd spikes/engine && LIBRARY_PATH="$(sdl2-config --prefix)/lib${LIBRARY_PATH:+:$LIBRARY_PATH}" cargo build --locked --features host-audio,native-decode --bin n4-host --bin n4

@@ -73,6 +73,17 @@ enum Command {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Trace the Final of every path-traced scene in a frame range and keep the pictures, so the
+    /// viewer plays them at speed and an export reuses them. Prints one JSON line per frame.
+    Finish {
+        project: PathBuf,
+        /// Half-open project frames, e.g. 0..51. Defaults to the whole film.
+        #[arg(long)]
+        frames: Option<String>,
+        /// Keep the pictures here instead of the user cache.
+        #[arg(long)]
+        final_store: Option<PathBuf>,
+    },
     /// Apply newline-delimited edit commands, replying once per command.
     Session { project: PathBuf },
     /// Open an editor session with newline-delimited JSON requests and replies.
@@ -266,8 +277,60 @@ fn main() -> Result<()> {
             println!("{receipt}");
             Ok(())
         }
+        Command::Finish {
+            project,
+            frames,
+            final_store,
+        } => {
+            if let Some(reason) = Engine::path_trace_unavailable() {
+                anyhow::bail!("{reason}");
+            }
+            let mut engine = Engine::new(Project::load(&project)?)?;
+            match final_store {
+                Some(directory) => engine.persist_finals(directory)?,
+                None => engine.persist_finals_in_user_cache()?,
+            }
+            let duration = engine.project().duration()?;
+            let range = match frames.as_deref() {
+                None => 0..duration,
+                Some(text) => {
+                    let (a, b) = text.split_once("..").context("expected frames as A..B")?;
+                    a.parse()?..b.parse()?
+                }
+            };
+            ensure!(
+                range.start < range.end && range.end <= duration,
+                "frames must lie within 0..{duration}"
+            );
+            let started = std::time::Instant::now();
+            let (mut traced, mut reused) = (0, 0);
+            for frame in range.clone() {
+                let before = std::time::Instant::now();
+                let (picture, scenes) = engine
+                    .render_final(frame)
+                    .with_context(|| format!("finish frame {frame}"))?;
+                let finals = picture.trace.graphics.path_traced_final;
+                traced += scenes;
+                reused += finals - scenes;
+                println!(
+                    "{}",
+                    serde_json::json!({"frame": frame, "traced": scenes, "reused": finals - scenes,
+                                       "seconds": before.elapsed().as_secs_f64()})
+                );
+            }
+            println!(
+                "{}",
+                serde_json::json!({"frames": range.len(), "traced": traced, "reused": reused,
+                                   "seconds": started.elapsed().as_secs_f64()})
+            );
+            Ok(())
+        }
         Command::Export { project, out } => {
             let mut engine = Engine::new(Project::load(&project)?)?;
+            // Reuse path-traced pictures a viewer or `finish` already made, and keep new ones.
+            if Engine::path_trace_unavailable().is_none() {
+                engine.persist_finals_in_user_cache()?;
+            }
             let report = n4_engine::export::write_mp4(&mut engine, &out)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
             Ok(())
