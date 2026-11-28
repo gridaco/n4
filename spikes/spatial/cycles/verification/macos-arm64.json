@@ -1,0 +1,287 @@
+{
+ "machine": {
+  "model": "Apple M4 Pro",
+  "macos": "26.6"
+ },
+ "n4_sha256": "4cc3a0ec22065969e31c3a5af4cab8c5a72af514b7ff950d4c66a2708e9978a5",
+ "size": [
+  1920,
+  1080
+ ],
+ "recipe": "64 samples, 8 bounces, denoised",
+ "frames": [
+  4,
+  25,
+  50
+ ],
+ "checks": {
+  "without --final the scene is a Draft": {
+   "pass": true,
+   "traced": 0,
+   "final": [
+    0,
+    0,
+    0
+   ],
+   "draft": [
+    1,
+    1,
+    1
+   ],
+   "seconds": [
+    0,
+    0,
+    0
+   ],
+   "wall": 1.65
+  },
+  "--final traces each frame once": {
+   "pass": true,
+   "traced": 3,
+   "final": [
+    1,
+    1,
+    1
+   ],
+   "draft": [
+    0,
+    0,
+    0
+   ],
+   "seconds": [
+    5.622,
+    4.633,
+    4.473
+   ],
+   "wall": 15.16
+  },
+  "draft and final differ": {
+   "pass": true,
+   "changed_pixels": [
+    1070924,
+    850741,
+    867516
+   ]
+  },
+  "a second process reuses stored pictures, in reverse order": {
+   "pass": true,
+   "traced": 0,
+   "final": [
+    1,
+    1,
+    1
+   ],
+   "draft": [
+    0,
+    0,
+    0
+   ],
+   "seconds": [
+    0.229,
+    0.205,
+    0.218
+   ],
+   "wall": 1.03,
+   "identical": true
+  },
+  "an ordinary render shows a stored Final": {
+   "pass": true,
+   "traced": 0,
+   "final": [
+    1,
+    1,
+    1
+   ],
+   "draft": [
+    0,
+    0,
+    0
+   ],
+   "seconds": [
+    0,
+    0,
+    0
+   ],
+   "wall": 1.01
+  },
+  "a relative path and a copy of the project find the same pictures": {
+   "pass": true,
+   "relative": {
+    "traced": 0,
+    "final": [
+     1,
+     1,
+     1
+    ],
+    "draft": [
+     0,
+     0,
+     0
+    ],
+    "seconds": [
+     0.236,
+     0.203,
+     0.205
+    ],
+    "wall": 1.01
+   },
+   "copy": {
+    "traced": 0,
+    "final": [
+     1,
+     1,
+     1
+    ],
+    "draft": [
+     0,
+     0,
+     0
+    ],
+    "seconds": [
+     0.235,
+     0.204,
+     0.205
+    ],
+    "wall": 1.0
+   }
+  },
+  "a cold re-render in reverse order is visually the same": {
+   "pass": true,
+   "largest_difference_of_255": 1,
+   "pixels_within_2": 1.0,
+   "traced": 3,
+   "final": [
+    1,
+    1,
+    1
+   ],
+   "draft": [
+    0,
+    0,
+    0
+   ],
+   "seconds": [
+    4.836,
+    4.566,
+    4.921
+   ],
+   "wall": 14.74
+  },
+  "a caption edit traces nothing": {
+   "pass": true,
+   "traced": 0,
+   "final": [
+    1,
+    1,
+    1
+   ],
+   "draft": [
+    0,
+    0,
+    0
+   ],
+   "seconds": [
+    0.237,
+    0.203,
+    0.206
+   ],
+   "wall": 1.02,
+   "changed_pixels": [
+    4469,
+    4469,
+    4469
+   ]
+  },
+  "a new word on the screen traces every frame that shows it": {
+   "pass": true,
+   "traced": 3,
+   "final": [
+    1,
+    1,
+    1
+   ],
+   "draft": [
+    0,
+    0,
+    0
+   ],
+   "seconds": [
+    5.271,
+    4.559,
+    4.496
+   ],
+   "wall": 14.75,
+   "changed_pixels": [
+    9657,
+    1638,
+    1489
+   ],
+   "changed_below_the_lid_on_frame_4": 1185
+  },
+  "slipping the footage three frames traces every frame": {
+   "pass": true,
+   "traced": 3,
+   "final": [
+    1,
+    1,
+    1
+   ],
+   "draft": [
+    0,
+    0,
+    0
+   ],
+   "seconds": [
+    5.337,
+    4.543,
+    4.487
+   ],
+   "wall": 14.81,
+   "changed_pixels": [
+    54836,
+    84720,
+    95032
+   ]
+  },
+  "moving the key light traces every frame": {
+   "pass": true,
+   "traced": 3,
+   "final": [
+    1,
+    1,
+    1
+   ],
+   "draft": [
+    0,
+    0,
+    0
+   ],
+   "seconds": [
+    5.321,
+    4.555,
+    4.461
+   ],
+   "wall": 14.77,
+   "changed_pixels": [
+    458047,
+    450787,
+    444906
+   ]
+  },
+  "the range is traced once, then exported from the store": {
+   "pass": true,
+   "finish": {
+    "seconds": 225.3,
+    "traced": 51,
+    "median_frame_seconds": 4.356,
+    "first_frame_seconds": 5.211
+   },
+   "export_seconds": 1.1,
+   "frames": 51,
+   "encoder_input_sha256": "c8cc7afbb5809a4d0aac2f9656c56b11a3a9cb19f73f7fc767b56cefece88309",
+   "second_export_same_input": true,
+   "store_megabytes": 403.4
+  }
+ },
+ "passed": true
+}

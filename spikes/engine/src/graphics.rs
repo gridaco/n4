@@ -23,11 +23,18 @@ use std::{
     sync::{Arc, Weak},
 };
 use unicode_segmentation::UnicodeSegmentation;
+mod final_store;
 mod live_surface_cache;
 mod spatial;
+#[cfg(all(test, feature = "cycles"))]
+pub(crate) use final_store::TRACER as FINAL_TRACER;
+pub(crate) use final_store::{
+    FinalKey, FinalModel, FinalPicture, FinalRect, FinalRequest, FinalStore, FinalSurface,
+    StableHasher,
+};
 pub use spatial::{
-    DistantLight, LiveSurface, MatteCoverage, ObjectMatte, Scene3d, SurfaceRole, TextPlane,
-    UsdInstance,
+    AmbientLight, DistantLight, LiveSurface, MatteCoverage, ObjectMatte, PathTrace, RectLight,
+    Scene3d, SurfaceRole, TextPlane, UsdInstance,
 };
 mod source_blur;
 mod source_effect;
@@ -899,6 +906,16 @@ pub struct PaintStats {
     pub shadow_filtered_pixels: u64,
     /// Largest logical underlay workspace used by this frame.
     pub shadow_scratch_bytes: u64,
+    /// Path-traced scenes composited from a finished Final picture.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub path_traced_final: u32,
+    /// Path-traced scenes drawn by the rasterizer because their Final is not rendered yet.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub path_traced_draft: u32,
+}
+
+fn is_zero(count: &u32) -> bool {
+    *count == 0
 }
 
 const TRANSIENT_TEXTURE_BYTES: usize = 32 << 20;
@@ -906,6 +923,11 @@ const TRANSIENT_TEXTURE_ENTRIES: usize = 64;
 
 #[derive(Default)]
 pub(crate) struct PaintCache {
+    pub(crate) finals: FinalStore,
+    /// Content identity of prepared meshes. Holding the mesh keeps its address from being
+    /// reused by a different one.
+    pub(crate) mesh_hashes: HashMap<(PathBuf, String), (Arc<nothing_spatial::Mesh>, u64)>,
+    pub(crate) file_digests: crate::render::gpu::spatial::FileDigests,
     pub(crate) live_surfaces: live_surface_cache::LiveSurfaceCache,
     pub(crate) meshes: HashMap<(PathBuf, String), Arc<nothing_spatial::Mesh>>,
     pub(crate) mesh_buffers: HashMap<(PathBuf, String), nothing_spatial_wgpu::MeshBuffers>,
@@ -1308,6 +1330,7 @@ impl PaintCache {
                 .any(|m| m.surfaces.contains(surface))
         });
         self.meshes.retain(|k, _| needed.meshes.contains(k));
+        self.mesh_hashes.retain(|k, _| needed.meshes.contains(k));
         self.mesh_buffers.retain(|k, _| needed.meshes.contains(k));
         self.measured_paths
             .retain(|d, _| needed.measured_paths.contains(d));

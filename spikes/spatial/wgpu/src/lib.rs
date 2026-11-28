@@ -4,7 +4,7 @@ mod studio;
 mod surfaces;
 use anyhow::{Context, Result, ensure};
 use nothing_spatial::Mesh;
-pub use studio::{PartPose, Studio, SurfaceBinding, SurfaceMode};
+pub use studio::{PartPose, RectLight, Rig, Studio, SurfaceBinding, SurfaceMode};
 use wgpu::util::DeviceExt;
 
 /// Single-sampled color target. Coverage resolves to premultiplied color on transparent black.

@@ -1,0 +1,13 @@
+diff --git a/src/app/CMakeLists.txt b/src/app/CMakeLists.txt
+index a04fd60..0d54fba 100644
+--- a/src/app/CMakeLists.txt
++++ b/src/app/CMakeLists.txt
+@@ -172,3 +172,8 @@ if(WITH_CYCLES_PRECOMPUTE)
+     TARGETS cycles_precompute
+     DESTINATION ${app_install_dir})
+ endif()
++
++# N4 bridge, built from a directory outside this tree (N4_BRIDGE_DIR).
++if(N4_BRIDGE_DIR)
++  add_subdirectory(${N4_BRIDGE_DIR} n4_bridge)
++endif()

@@ -24,15 +24,29 @@ struct State<T> {
     ready: VecDeque<Result<T>>,
     export: Option<ExportWork>,
     export_progress: Option<Arc<ExportProgress>>,
+    /// A parked frame shown as a Draft whose path-traced Final should follow.
+    finish: Option<u32>,
+    finishing: bool,
     shutdown: bool,
 }
 
 struct Queue<T> {
     state: Mutex<State<T>>,
     changed: Condvar,
+    /// With `true`, asks a Final being traced to stop; the request stands until `false`
+    /// withdraws it ahead of the next trace.
+    interrupt: Mutex<Option<Interrupt>>,
 }
 
+type Interrupt = Arc<dyn Fn(bool) + Send + Sync>;
+
 impl<T> Queue<T> {
+    fn interrupt(&self, stop: bool) {
+        if let Some(interrupt) = &*self.interrupt.lock().unwrap() {
+            interrupt(stop);
+        }
+    }
+
     fn new() -> Self {
         Self {
             state: Mutex::new(State {
@@ -41,9 +55,12 @@ impl<T> Queue<T> {
                 ready: VecDeque::with_capacity(LOOKAHEAD),
                 export: None,
                 export_progress: None,
+                finish: None,
+                finishing: false,
                 shutdown: false,
             }),
             changed: Condvar::new(),
+            interrupt: Mutex::new(None),
         }
     }
 
@@ -52,6 +69,10 @@ impl<T> Queue<T> {
         state.generation += 1;
         state.range = range;
         state.ready.clear();
+        state.finish = None;
+        if state.finishing {
+            self.interrupt(true);
+        }
         self.changed.notify_one();
     }
 
@@ -81,17 +102,40 @@ impl<T> Queue<T> {
         engine: &mut E,
         mut render: impl FnMut(&mut E, u32) -> Result<T>,
         mut export: impl FnMut(&mut E, &ExportWork) -> Result<ExportReport>,
+        is_draft: impl Fn(&T) -> bool,
+        mut finish: impl FnMut(&mut E, u32) -> Result<T>,
     ) {
         loop {
             let mut state = self.state.lock().unwrap();
             while !state.shutdown
                 && state.export.is_none()
+                && state.finish.is_none()
                 && (state.range.is_empty() || state.ready.len() == LOOKAHEAD)
             {
                 state = self.changed.wait(state).unwrap();
             }
             if state.shutdown {
                 return;
+            }
+            // Parked on a Draft with nothing else to do: trace its Final and present it after.
+            if state.export.is_none()
+                && state.range.is_empty()
+                && let Some(frame) = state.finish.take()
+            {
+                let generation = state.generation;
+                state.finishing = true;
+                // Under the lock, so a request to stop an earlier trace cannot land on this one
+                // and one meant for this one cannot be withdrawn.
+                self.interrupt(false);
+                drop(state);
+                let result = finish(engine, frame);
+                let mut state = self.state.lock().unwrap();
+                state.finishing = false;
+                // Moving on interrupts the trace; its error is not the new request's.
+                if state.generation == generation && !state.shutdown {
+                    state.ready.push_back(result);
+                }
+                continue;
             }
             if let Some(job) = state.export.take() {
                 drop(state);
@@ -110,6 +154,9 @@ impl<T> Queue<T> {
                 if result.is_err() {
                     state.range = 0..0;
                 }
+                if state.range.is_empty() && result.as_ref().is_ok_and(&is_draft) {
+                    state.finish = Some(frame);
+                }
                 state.ready.push_back(result);
             }
         }
@@ -118,8 +165,11 @@ impl<T> Queue<T> {
     fn stop(&self) {
         let mut state = self.state.lock().unwrap();
         state.shutdown = true;
+        if state.finishing {
+            self.interrupt(true);
+        }
         if let Some(progress) = &state.export_progress {
-            progress.cancelled.store(true, Ordering::Relaxed);
+            progress.cancel();
         }
         state.export = None;
         self.changed.notify_one();
@@ -130,6 +180,17 @@ impl<T> Queue<T> {
 struct ExportProgress {
     rendered: AtomicU32,
     cancelled: AtomicBool,
+    /// Reaches a Final the export is tracing, which can take seconds a frame.
+    interrupt: Option<Interrupt>,
+}
+
+impl ExportProgress {
+    fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+        if let Some(interrupt) = &self.interrupt {
+            interrupt(true);
+        }
+    }
 }
 
 struct ExportWork {
@@ -141,6 +202,15 @@ struct ExportWork {
 
 impl ExportWork {
     fn run(&self, engine: &mut Engine) -> Result<ExportReport> {
+        // Withdraw a stop left by an earlier trace. One meant for this export sets
+        // `cancelled` first, so it is seen here or reaches the trace.
+        if let Some(interrupt) = &self.progress.interrupt {
+            interrupt(false);
+        }
+        ensure!(
+            !self.progress.cancelled.load(Ordering::Relaxed),
+            "export cancelled"
+        );
         write_mp4_with_progress(engine, &self.path, self.audio.as_deref(), |n| {
             self.progress.rendered.store(n, Ordering::Relaxed);
             ensure!(
@@ -168,7 +238,7 @@ impl ExportJob {
     }
 
     pub fn cancel(&self) {
-        self.progress.cancelled.store(true, Ordering::Relaxed);
+        self.progress.cancel();
     }
 
     pub fn poll(&self) -> Result<Option<ExportReport>> {
@@ -245,11 +315,24 @@ impl Transport {
                     }
                 };
                 engine.revision = revision;
+                // Finished path-traced pictures outlive this revision and this process.
+                let traces = Engine::path_trace_unavailable().is_none()
+                    && engine.persist_finals_in_user_cache().is_ok();
+                let cancel = engine.final_cancel();
+                *worker_queue.interrupt.lock().unwrap() = Some(Arc::new(move |stop| {
+                    if stop {
+                        cancel.cancel()
+                    } else {
+                        cancel.rearm()
+                    }
+                }));
                 if initialized.send(Ok(())).is_ok() {
                     worker_queue.run(
                         &mut engine,
                         |engine, frame| worker_cache.render(engine, frame),
                         |engine, job| job.run(engine),
+                        |picture: &Frame| traces && picture.trace.graphics.path_traced_draft > 0,
+                        |engine, frame| worker_cache.finish(engine, frame),
                     );
                 }
             })?;
@@ -330,8 +413,17 @@ impl Transport {
         state.generation += 1;
         state.range = 0..0;
         state.ready.clear();
+        state.finish = None;
+        // The export does not wait behind a Final traced for a parked frame.
+        if state.finishing {
+            self.queue.interrupt(true);
+        }
         let (result, receive) = mpsc::sync_channel(1);
-        let progress = Arc::new(ExportProgress::default());
+        let progress = Arc::new(ExportProgress {
+            rendered: AtomicU32::new(0),
+            cancelled: AtomicBool::new(false),
+            interrupt: self.queue.interrupt.lock().unwrap().clone(),
+        });
         state.export_progress = Some(Arc::clone(&progress));
         state.export = Some(ExportWork {
             path,
@@ -408,6 +500,8 @@ mod tests {
                     Ok(n)
                 },
                 |_, _| unreachable!(),
+                |_| false,
+                |_, _| unreachable!(),
             )
         });
         queue.replace(4..20);
@@ -445,6 +539,8 @@ mod tests {
                     allow.recv_timeout(Duration::from_secs(2))?;
                     Ok(n)
                 },
+                |_, _| unreachable!(),
+                |_| false,
                 |_, _| unreachable!(),
             )
         });
@@ -493,6 +589,8 @@ mod tests {
                     Ok(n)
                 },
                 |_, _| unreachable!(),
+                |_| false,
+                |_, _| unreachable!(),
             )
         });
         queue.replace(0..9);
@@ -506,6 +604,73 @@ mod tests {
         assert!(next(&queue).is_err());
         queue.replace(9..10);
         assert_eq!(next(&queue)?, 9);
+        queue.stop();
+        worker.join().unwrap();
+        Ok(())
+    }
+
+    #[test]
+    fn a_parked_draft_is_followed_by_its_final_unless_the_user_moves_on() -> Result<()> {
+        let queue = Arc::new(Queue::new());
+        let other = Arc::clone(&queue);
+        let (finishing_tx, finishing) = mpsc::channel();
+        let (allow_tx, allow) = mpsc::channel::<bool>();
+        let interrupted = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&interrupted);
+        let interrupt_allow = allow_tx.clone();
+        let interrupt_allow = Mutex::new(interrupt_allow);
+        *queue.interrupt.lock().unwrap() = Some(Arc::new(move |stop| {
+            // The worker withdraws a stale request before each trace; only a stop counts.
+            if stop {
+                flag.store(true, Ordering::Relaxed);
+                let _ = interrupt_allow.lock().unwrap().send(false);
+            }
+        }));
+        let worker = thread::spawn(move || {
+            other.run(
+                &mut (),
+                |_, n| Ok(n),
+                |_, _| unreachable!(),
+                // Odd frames stand for path-traced scenes without a Final.
+                |n: &u32| n % 2 == 1,
+                |_, n| {
+                    finishing_tx.send(n)?;
+                    ensure!(
+                        allow.recv_timeout(Duration::from_secs(2))?,
+                        "render cancelled"
+                    );
+                    Ok(n + 100)
+                },
+            )
+        });
+        let next = |queue: &Queue<u32>| -> Result<u32> {
+            for _ in 0..200 {
+                if let Some(n) = queue.pop()? {
+                    return Ok(n);
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+            anyhow::bail!("no picture arrived")
+        };
+        // Parked on a Draft: the Draft arrives at once, the Final after its trace.
+        queue.replace(5..6);
+        assert_eq!(next(&queue)?, 5);
+        assert_eq!(finishing.recv_timeout(Duration::from_secs(2))?, 5);
+        allow_tx.send(true)?;
+        assert_eq!(next(&queue)?, 105);
+        // An even frame needs no Final, and a Draft passed during playback does not start one.
+        queue.replace(6..7);
+        assert_eq!(next(&queue)?, 6);
+        queue.replace(1..3);
+        assert_eq!((next(&queue)?, next(&queue)?), (1, 2));
+        assert!(finishing.recv_timeout(Duration::from_millis(100)).is_err());
+        // Moving on while a Final is traced interrupts it and discards its result.
+        queue.replace(7..8);
+        assert_eq!(next(&queue)?, 7);
+        assert_eq!(finishing.recv_timeout(Duration::from_secs(2))?, 7);
+        queue.replace(8..9);
+        assert!(interrupted.load(Ordering::Relaxed));
+        assert_eq!(next(&queue)?, 8);
         queue.stop();
         worker.join().unwrap();
         Ok(())

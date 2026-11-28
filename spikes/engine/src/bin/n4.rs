@@ -73,6 +73,17 @@ enum Command {
         #[arg(long)]
         out: PathBuf,
     },
+    /// Trace the Final of every path-traced scene in a frame range and keep the pictures, so the
+    /// viewer plays them at speed and an export reuses them. Prints one JSON line per frame.
+    Finish {
+        project: PathBuf,
+        /// Half-open project frames, e.g. 0..51. Defaults to the whole film.
+        #[arg(long)]
+        frames: Option<String>,
+        /// Keep the pictures here instead of the user cache.
+        #[arg(long)]
+        final_store: Option<PathBuf>,
+    },
     /// Apply newline-delimited edit commands, replying once per command.
     Session { project: PathBuf },
     /// Open an editor session with newline-delimited JSON requests and replies.
@@ -92,6 +103,13 @@ enum Command {
         /// Change the authored paragraph width in pixels.
         #[arg(long)]
         title_width: Option<u32>,
+        /// Finish path-traced scenes with their authored recipe before writing each frame.
+        /// Without it such a scene is written as a rasterized Draft unless its Final is stored.
+        #[arg(long = "final")]
+        finished: bool,
+        /// Keep finished path-traced pictures in this directory and reuse the ones found there.
+        #[arg(long)]
+        final_store: Option<PathBuf>,
     },
 }
 
@@ -259,8 +277,63 @@ fn main() -> Result<()> {
             println!("{receipt}");
             Ok(())
         }
+        Command::Finish {
+            project,
+            frames,
+            final_store,
+        } => {
+            if let Some(reason) = Engine::path_trace_unavailable() {
+                anyhow::bail!("{reason}");
+            }
+            let mut engine = Engine::new(Project::load(&project)?)?;
+            match final_store {
+                Some(directory) => engine.persist_finals(directory)?,
+                None => engine.persist_finals_in_user_cache()?,
+            }
+            let duration = engine.project().duration()?;
+            let range = match frames.as_deref() {
+                None => 0..duration,
+                Some(text) => {
+                    let (a, b) = text.split_once("..").context("expected frames as A..B")?;
+                    a.parse()?..b.parse()?
+                }
+            };
+            ensure!(
+                range.start < range.end && range.end <= duration,
+                "frames must lie within 0..{duration}"
+            );
+            let started = std::time::Instant::now();
+            let (mut traced, mut reused) = (0, 0);
+            for frame in range.clone() {
+                let before = std::time::Instant::now();
+                let (picture, scenes) = engine
+                    .render_final(frame)
+                    .with_context(|| format!("finish frame {frame}"))?;
+                let finals = picture.trace.graphics.path_traced_final;
+                traced += scenes;
+                reused += finals - scenes;
+                println!(
+                    "{}",
+                    serde_json::json!({"frame": frame, "traced": scenes, "reused": finals - scenes,
+                                       "seconds": before.elapsed().as_secs_f64()})
+                );
+            }
+            println!(
+                "{}",
+                serde_json::json!({"frames": range.len(), "traced": traced, "reused": reused,
+                                   "seconds": started.elapsed().as_secs_f64()})
+            );
+            Ok(())
+        }
         Command::Export { project, out } => {
             let mut engine = Engine::new(Project::load(&project)?)?;
+            // Reuse path-traced pictures a viewer or `finish` already made, and keep new ones.
+            if Engine::path_trace_unavailable().is_none()
+                && let Err(error) = engine.persist_finals_in_user_cache()
+            {
+                // Only a project with path-traced scenes misses it, and then only for reuse.
+                eprintln!("Path-traced pictures are not kept: {error:#}");
+            }
             let report = n4_engine::export::write_mp4(&mut engine, &out)?;
             println!("{}", serde_json::to_string_pretty(&report)?);
             Ok(())
@@ -274,7 +347,17 @@ fn main() -> Result<()> {
             out,
             title_start,
             title_width,
-        } => render_images(project, frames, out, title_start, title_width),
+            finished,
+            final_store,
+        } => render_images(
+            project,
+            frames,
+            out,
+            title_start,
+            title_width,
+            finished,
+            final_store,
+        ),
     }
 }
 
@@ -417,6 +500,8 @@ fn render_images(
     out: PathBuf,
     title_start: Option<u32>,
     title_width: Option<u32>,
+    finished: bool,
+    final_store: Option<PathBuf>,
 ) -> Result<()> {
     ensure!(
         !out.exists(),
@@ -425,6 +510,9 @@ fn render_images(
     );
     let mut engine = Engine::new(Project::load(&project)?)?;
     engine.edit_title(title_start, title_width)?;
+    if let Some(directory) = final_store {
+        engine.persist_finals(directory)?;
+    }
     let parent = out
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -435,12 +523,21 @@ fn render_images(
         .with_context(|| format!("prepare output beside {}", out.display()))?;
     let mut results = Vec::new();
     for (i, number) in frames.into_iter().enumerate() {
-        let f = engine
-            .render(number)
-            .with_context(|| format!("render frame {number}"))?;
+        let started = std::time::Instant::now();
+        let (f, traced) = if finished {
+            engine.render_final(number)
+        } else {
+            engine.render(number).map(|f| (f, 0))
+        }
+        .with_context(|| format!("render frame {number}"))?;
         let name = format!("{i:03}-f{number:04}.png");
         save_png(&staging.path().join(&name), f.size, &f.rgba)?;
-        results.push(serde_json::json!({ "file": name, "trace": f.trace }));
+        let mut result = serde_json::json!({ "file": name, "trace": f.trace });
+        if finished {
+            result["path_traced_scenes"] = traced.into();
+            result["seconds"] = started.elapsed().as_secs_f64().into();
+        }
+        results.push(result);
     }
     let receipt = serde_json::json!({ "adapter": engine.adapter_name(), "frames": results });
     fs::write(

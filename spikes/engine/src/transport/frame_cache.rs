@@ -120,6 +120,16 @@ impl ComposedFrameCache {
             return Ok(picture);
         }
         let picture = engine.render(frame)?;
+        // A Draft of a path-traced scene is superseded as soon as its Final is traced.
+        if picture.trace.graphics.path_traced_draft == 0 {
+            self.put(&picture);
+        }
+        Ok(picture)
+    }
+
+    /// Trace the frame's path-traced scenes and keep the finished picture.
+    pub(super) fn finish(&self, engine: &mut Engine, frame: u32) -> Result<Frame> {
+        let (picture, _) = engine.render_final(frame)?;
         self.put(&picture);
         Ok(picture)
     }

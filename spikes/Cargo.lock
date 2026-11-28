@@ -695,6 +695,7 @@ dependencies = [
  "libc",
  "nothing-openusd",
  "nothing-spatial",
+ "nothing-spatial-cycles",
  "nothing-spatial-wgpu",
  "objc2-metal",
  "png",
@@ -776,6 +777,20 @@ dependencies = [
 [[package]]
 name = "nothing-spatial"
 version = "0.0.0"
+
+[[package]]
+name = "nothing-spatial-cycles"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "image",
+ "nothing-openusd",
+ "nothing-spatial",
+ "nothing-spatial-wgpu",
+ "pollster",
+ "serde_json",
+ "wgpu",
+]
 
 [[package]]
 name = "nothing-spatial-wgpu"

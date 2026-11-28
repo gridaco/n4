@@ -312,6 +312,7 @@ impl Viewer {
                 cursor,
                 next.transport,
                 sound,
+                &picture,
             ),
             snapshot: next.snapshot,
             inspection: next.inspection,

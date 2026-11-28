@@ -44,6 +44,10 @@ pub struct Controller {
     sound: Option<Sound>,
     seeking: Option<u32>,
     upcoming: Option<Frame>,
+    /// The parked picture is a Draft of a path-traced scene and its Final may still arrive.
+    awaiting_final: bool,
+    /// The picture last handed to the host is a Draft.
+    draft_shown: bool,
 }
 
 impl Controller {
@@ -58,6 +62,8 @@ impl Controller {
             sound: None,
             seeking: None,
             upcoming: None,
+            awaiting_final: false,
+            draft_shown: false,
         }
     }
     pub fn reopened(
@@ -66,12 +72,16 @@ impl Controller {
         cursor: u32,
         worker: Transport,
         sound: Option<Sound>,
+        parked: &Frame,
     ) -> Self {
         Self {
             cursor,
             displayed: Some(cursor),
             transport: Some(worker),
             sound,
+            // The new transport follows the parked Draft it just delivered with its Final.
+            awaiting_final: parked.trace.graphics.path_traced_draft > 0,
+            draft_shown: parked.trace.graphics.path_traced_draft > 0,
             ..Self::new(duration, fps)
         }
     }
@@ -132,6 +142,7 @@ impl Controller {
         if let Some(worker) = &self.transport {
             worker.seek(frame)?;
             self.seeking = Some(frame);
+            self.awaiting_final = false;
         }
         Ok(())
     }
@@ -191,7 +202,11 @@ impl Controller {
         self.pause_output();
         self.mode = Mode::Parked;
         self.cursor = target.min(self.duration - 1);
-        if self.displayed != Some(self.cursor) {
+        // A Draft reached by playing or dragging has no Final on its way: the transport traces
+        // one only for a frame it was parked on. Ask for the frame again.
+        let stale_draft =
+            self.draft_shown && !self.awaiting_final && self.seeking != Some(self.cursor);
+        if self.displayed != Some(self.cursor) || stale_draft {
             self.seek(self.cursor)?;
         }
         Ok(())
@@ -219,6 +234,14 @@ impl Controller {
 
     /// Retain one future picture and use the audio device clock to choose when it is due.
     pub fn poll(&mut self) -> Result<Option<Frame>> {
+        let frame = self.next_picture()?;
+        if let Some(frame) = &frame {
+            self.draft_shown = frame.trace.graphics.path_traced_draft > 0;
+        }
+        Ok(frame)
+    }
+
+    fn next_picture(&mut self) -> Result<Option<Frame>> {
         if let Some(sound) = &self.sound {
             sound.check()?;
         }
@@ -227,13 +250,16 @@ impl Controller {
         };
         match self.mode {
             Mode::Parked | Mode::Dragging => {
-                if self.seeking.is_none() {
+                if self.seeking.is_none() && !self.awaiting_final {
                     return Ok(None);
                 }
                 let Some(frame) = worker.try_next()? else {
                     return Ok(None);
                 };
                 self.seeking = None;
+                // The transport follows a parked Draft with its Final for the same frame.
+                self.awaiting_final =
+                    !self.dragging() && frame.trace.graphics.path_traced_draft > 0;
                 if self.dragging() && self.cursor != frame.trace.request.timeline_frame {
                     self.seek(self.cursor)?;
                 }

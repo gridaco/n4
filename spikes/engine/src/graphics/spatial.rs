@@ -13,6 +13,56 @@ pub struct Scene3d {
     pub models: Vec<UsdInstance>,
     #[serde(default)]
     pub planes: Vec<TextPlane>,
+    /// Area lights any renderer can reproduce. With at least one, the scene is lit by its rect
+    /// lights and `ambient`, and the analytic studio environment is not used.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rect_lights: Vec<RectLight>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ambient: Option<AmbientLight>,
+    /// Ask for a path-traced Final. The rasterizer then supplies the Draft.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_trace: Option<PathTrace>,
+}
+
+/// A one-sided rectangle centred at `center`, facing `aim`, with its long edge horizontal.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct RectLight {
+    pub center: [Scalar; 3],
+    pub aim: [Scalar; 3],
+    /// Width and height in metres.
+    pub size: [Scalar; 2],
+    /// Emitted scene-linear radiance for white.
+    pub intensity: Scalar,
+    pub color: [u8; 3],
+}
+
+/// Constant radiance arriving from every direction not covered by a light.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AmbientLight {
+    pub intensity: Scalar,
+    pub color: [u8; 3],
+}
+
+/// Everything that fixes a path-traced frame's sampling. Preview and export both use it.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PathTrace {
+    pub samples: u32,
+    pub bounces: u32,
+    /// Upper bound on one indirect sample's contribution; zero disables it.
+    pub clamp: Scalar,
+    pub denoise: bool,
+    pub seed: u32,
+}
+
+fn unit_scalar() -> Scalar {
+    Scalar::try_from(1.).unwrap()
+}
+
+fn is_unit(value: &Scalar) -> bool {
+    f32::from(*value) == 1.
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -63,13 +113,23 @@ pub struct LiveSurface {
     pub role: SurfaceRole,
     pub size: [u32; 2],
     pub layers: Vec<Graphic>,
+    /// For an emissive surface: emitted radiance per unit of artwork, as the camera sees it.
+    #[serde(default = "unit_scalar", skip_serializing_if = "is_unit")]
+    pub emission: Scalar,
+    /// For an emissive surface: extra gain on the light it casts on the rest of the scene.
+    #[serde(default = "unit_scalar", skip_serializing_if = "is_unit")]
+    pub glow: Scalar,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SurfaceRole {
+    /// Shown as authored. It lights nothing.
     Unlit,
     BaseColor,
+    /// A screen: shown as authored times `emission`, and in a path-traced frame it lights and
+    /// reflects in the scene. The rasterizer approximates it with one rect light.
+    Emissive,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -180,6 +240,40 @@ impl Scene3d {
                 "distant-light requires a nonzero direction and nonnegative intensity"
             );
         }
+        for light in &self.rect_lights {
+            let offset: [f32; 3] =
+                std::array::from_fn(|i| f32::from(light.aim[i]) - f32::from(light.center[i]));
+            ensure!(
+                offset.iter().any(|&v| v != 0.)
+                    && light.size.iter().all(|&v| f32::from(v) > 0.)
+                    && f32::from(light.intensity) >= 0.,
+                "rect-light requires an aim away from its center, a positive size and nonnegative intensity"
+            );
+        }
+        if let Some(ambient) = &self.ambient {
+            ensure!(
+                f32::from(ambient.intensity) >= 0.,
+                "ambient-light intensity must be nonnegative"
+            );
+            ensure!(
+                !self.rect_lights.is_empty(),
+                "ambient-light applies to a scene lit by rect-light; the studio environment lights other scenes"
+            );
+        }
+        if let Some(trace) = &self.path_trace {
+            ensure!(
+                (1..=65_536).contains(&trace.samples) && trace.bounces <= 64,
+                "path-trace requires 1 to 65536 samples and at most 64 bounces"
+            );
+            ensure!(
+                f32::from(trace.clamp) >= 0.,
+                "path-trace clamp must be nonnegative"
+            );
+            ensure!(
+                !self.rect_lights.is_empty() && self.lights.is_empty() && self.planes.is_empty(),
+                "a path-traced scene is lit by rect-light and ambient-light and holds USD models; distant-light and text planes are not yet path traced"
+            );
+        }
         for model in &self.models {
             ensure!(
                 model.prim.starts_with('/') && !model.source.as_os_str().is_empty(),
@@ -212,6 +306,17 @@ impl Scene3d {
                         .iter()
                         .all(|v| (1..=crate::MAX_SURFACE_DIMENSION).contains(v)),
                     "invalid live surface dimensions"
+                );
+                ensure!(
+                    f32::from(surface.emission) > 0. && f32::from(surface.glow) >= 0.,
+                    "surface {} requires positive emission and nonnegative glow",
+                    surface.slot
+                );
+                ensure!(
+                    surface.role == SurfaceRole::Emissive
+                        || (is_unit(&surface.emission) && is_unit(&surface.glow)),
+                    "emission and glow apply to an emissive surface: {}",
+                    surface.slot
                 );
                 ensure!(
                     !crate::camera::contains_scene3d(&surface.layers)
@@ -382,6 +487,58 @@ mod tests {
         invalid(outside, "require a filter on a scene3d")?;
         layer["content"]["planes"][0]["id"] = json!("ribbon");
         invalid(layer, "duplicate scene object ID")?;
+        Ok(())
+    }
+
+    #[test]
+    fn a_path_traced_scene_declares_lights_any_renderer_can_reproduce() -> Result<()> {
+        let scene = json!({"type":"scene3d","pixels_per_meter":100,
+            "rect_lights":[{"center":[0,1,0],"aim":[0,0,0],"size":[0.5,0.3],"intensity":11,"color":[255,240,220]}],
+            "ambient":{"intensity":0.05,"color":[255,255,255]},
+            "path_trace":{"samples":64,"bounces":8,"clamp":10,"denoise":true,"seed":0},
+            "models":[{"source":"card.usda","prim":"/Card","surfaces":[{
+                "slot":"/Display","role":"emissive","glow":4,"size":[32,32],
+                "layers":[{"content":{"type":"video","source":"display.mp4","source_in":0,
+                           "start":0,"duration":1,"size":[32,32]}}]}]}]});
+        let decode = |content: &serde_json::Value| -> Result<Graphic> {
+            Ok(serde_json::from_value(json!({"content": content}))?)
+        };
+        let graphic = decode(&scene)?;
+        validate(std::slice::from_ref(&graphic), 1)?;
+        // Defaults are not written back, so documents without these features keep their bytes.
+        let Content::Scene3d(decoded) = &graphic.content else {
+            unreachable!()
+        };
+        let written = serde_json::to_value(&decoded.models[0].surfaces[0])?;
+        assert_eq!(written["glow"], json!(4.0));
+        assert!(written.get("emission").is_none());
+        for (path, value, reason) in [
+            (
+                "/rect_lights/0/aim",
+                json!([0, 1, 0]),
+                "aim away from its center",
+            ),
+            ("/rect_lights/0/size", json!([0, 1]), "positive size"),
+            ("/path_trace/samples", json!(0), "1 to 65536 samples"),
+            ("/models/0/surfaces/0/glow", json!(-1), "nonnegative glow"),
+            (
+                "/models/0/surfaces/0/role",
+                json!("unlit"),
+                "apply to an emissive surface",
+            ),
+        ] {
+            let mut candidate = scene.clone();
+            *candidate.pointer_mut(path).unwrap() = value;
+            let error = validate(&[decode(&candidate)?], 1).unwrap_err();
+            assert!(format!("{error:#}").contains(reason), "{path}: {error:#}");
+        }
+        let mut unlit = scene.clone();
+        unlit["rect_lights"] = json!([]);
+        let error = validate(&[decode(&unlit)?], 1).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("lit by rect-light"),
+            "{error:#}"
+        );
         Ok(())
     }
 }

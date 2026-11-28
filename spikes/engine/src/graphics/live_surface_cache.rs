@@ -135,6 +135,8 @@ mod tests {
             role: SurfaceRole::Unlit,
             size: [n, n],
             layers: vec![],
+            emission: 1f32.try_into().unwrap(),
+            glow: 1f32.try_into().unwrap(),
         };
         let time = |f| SampleTime::at(f, None, 0);
         let mut cache = LiveSurfaceCache::default();

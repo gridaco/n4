@@ -1,5 +1,5 @@
 //! Offline SDR delivery. Audio is addressed in samples on a stereo 48 kHz bus.
-//! Pictures come from the same Engine::render call used for full-quality inspection.
+//! Pictures come from the same Engine call used for full-quality inspection.
 use crate::{Engine, FrameRate, Project};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -347,8 +347,10 @@ pub(crate) fn write_mp4_with_progress(
     let result = (|| -> Result<()> {
         let mut pipe = child.stdin.take().context("encoder input closed")?;
         for number in 0..frames {
-            let frame = engine
-                .render(number)
+            // A path-traced scene is delivered as its Final, traced now if it is not stored.
+            // A build that cannot trace fails here instead of delivering a Draft.
+            let (frame, _) = engine
+                .render_final(number)
                 .with_context(|| format!("render export frame {number}"))?;
             pipe.write_all(&frame.rgba)
                 .context("feed compositor output to encoder")?;

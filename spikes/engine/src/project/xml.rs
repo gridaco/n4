@@ -532,9 +532,16 @@ fn read_graphic(node: Element) -> Result<Value> {
                 "studio" if kind == "scene3d" => {
                     put(&mut content, "studio", spatial::studio(child)?)?
                 }
-                "distant-light" | "usd" | "plane" if kind == "scene3d" => {
+                "ambient-light" if kind == "scene3d" => {
+                    put(&mut content, "ambient", spatial::ambient(child)?)?
+                }
+                "path-trace" if kind == "scene3d" => {
+                    put(&mut content, "path_trace", spatial::path_trace(child)?)?
+                }
+                "distant-light" | "rect-light" | "usd" | "plane" if kind == "scene3d" => {
                     let (field, value) = match name {
                         "distant-light" => ("lights", spatial::light(child)?),
+                        "rect-light" => ("rect_lights", spatial::rect_light(child)?),
                         "usd" => ("models", spatial::instance(child)?),
                         _ => ("planes", spatial::plane(child)?),
                     };
