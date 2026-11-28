@@ -2,7 +2,7 @@
 //! with an anchor, followed by a pair of controls and an endpoint for each segment.
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
-use skia_safe::Path as SkPath;
+use skia_safe::{Path as SkPath, PathBuilder};
 use std::hash::{Hash, Hasher};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -120,7 +120,7 @@ fn validate_count(points: &[CurvePoint]) -> Result<()> {
 impl CubicContour {
     pub(super) fn geometry(&self) -> Result<SkPath> {
         validate_count(&self.points)?;
-        let mut geometry = SkPath::new();
+        let mut geometry = PathBuilder::new();
         geometry.move_to(self.points[0].xy());
         for &[c1, c2, end] in self.points[1..].as_chunks::<3>().0 {
             geometry.cubic_to(c1.xy(), c2.xy(), end.xy());
@@ -128,7 +128,7 @@ impl CubicContour {
         if self.closed {
             geometry.close();
         }
-        Ok(geometry)
+        Ok(geometry.detach())
     }
 }
 

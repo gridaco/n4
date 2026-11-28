@@ -9,8 +9,11 @@ pub use crate::render::curve::{
     CubicContour, CurveEase, CurveKey, CurveMotion, CurvePoint, PathData,
 };
 pub use crate::render::path::{FillRule, NativePath, Stroke, StrokeCap, StrokeJoin, StrokeWidth};
-use crate::render::path::{MeasuredPath, paint_path, paint_with_measure, validate_path};
+use crate::render::path::{
+    MeasuredPath, paint_path, paint_with_measure, paint_with_measure_on, validate_path,
+};
 pub use crate::render::rect::{CornerRadius, CornerValues, NativeRect, RectGeometry, RectLength};
+use crate::render::skia_gpu::{Painter, SkiaGpu};
 use crate::render::svg::paint_svg;
 use crate::{MAX_SURFACE_DIMENSION, media::assets::PreparedAnimations, render::text};
 use anyhow::{Context, Result, bail, ensure};
@@ -870,6 +873,7 @@ pub struct PaintStats {
     /// Animated paragraphs newly shaped while rendering this frame.
     pub text_layouts: u32,
     pub filtered_layers: u32,
+    /// Graphic textures newly filled this frame, by an upload or by a drawing on the device.
     pub graphic_uploads: u32,
     pub spatial_passes: u32,
     /// Object coverage redraws resolved into named filter inputs, over all exposure samples.
@@ -1566,6 +1570,7 @@ impl PaintCache {
         content: &Content,
         animation: Option<(&[TextAnimator], u32, f64)>,
         stats: &mut PaintStats,
+        skia: Option<&mut SkiaGpu>,
         upload: impl FnOnce(&Raster) -> Result<wgpu::Texture>,
     ) -> Result<(wgpu::Texture, [i32; 2])> {
         let ranges = if let Some((animators, frame, fraction)) = animation {
@@ -1589,18 +1594,28 @@ impl PaintCache {
             stats.raster_hits += 1;
             return Ok(picture);
         }
-        let raster = match (content, &ranges) {
-            (Content::Label { rgb, underline, .. }, Some(ranges)) => {
-                self.text[content].paint(*rgb, ranges, underline.as_ref())?
-            }
-            (Content::Rect(rect), _) => rect.paint()?,
-            (Content::Path(path), _) => paint_with_measure(path, self.measured_paths.get(&path.d))?,
-            _ => paint_label(content, &mut self.faces)?,
+        let drawn = match skia {
+            Some(skia) => self.draw_on(content, ranges.as_deref(), skia)?,
+            None => None,
         };
-        let bytes = raster.rgba.len();
-        let texture = upload(&raster)?;
-        stats.raster_paints += 1;
         stats.graphic_uploads += 1;
+        let (texture, origin) = if let Some(drawn) = drawn {
+            drawn
+        } else {
+            let raster = match (content, &ranges) {
+                (Content::Label { rgb, underline, .. }, Some(ranges)) => {
+                    self.text[content].paint(*rgb, ranges, underline.as_ref())?
+                }
+                (Content::Rect(rect), _) => rect.paint()?,
+                (Content::Path(path), _) => {
+                    paint_with_measure(path, self.measured_paths.get(&path.d))?
+                }
+                _ => paint_label(content, &mut self.faces)?,
+            };
+            (upload(&raster)?, raster.origin)
+        };
+        let bytes = texture.width() as usize * texture.height() as usize * 4;
+        stats.raster_paints += 1;
         if bytes <= TRANSIENT_TEXTURE_BYTES {
             while self.sample_bytes + bytes > TRANSIENT_TEXTURE_BYTES
                 || self.samples.len() >= TRANSIENT_TEXTURE_ENTRIES
@@ -1612,12 +1627,65 @@ impl PaintCache {
                 content: content.clone(),
                 ranges,
                 texture: texture.clone(),
-                origin: raster.origin,
+                origin,
                 bytes,
             });
             self.sample_bytes += bytes;
         }
-        Ok((texture, raster.origin))
+        Ok((texture, origin))
+    }
+
+    /// Draw a rectangle, a path or a label straight into a compositor texture. Other content
+    /// is decoded or pinned on the CPU and has no drawing to repeat.
+    pub(crate) fn draw_static_on<P: Painter>(
+        &mut self,
+        content: &Content,
+        painter: &mut P,
+    ) -> Result<Option<P::Picture>> {
+        self.draw_on(content, None, painter)
+    }
+
+    fn draw_on<P: Painter>(
+        &mut self,
+        content: &Content,
+        ranges: Option<&[SampledRange]>,
+        painter: &mut P,
+    ) -> Result<Option<P::Picture>> {
+        Ok(Some(match content {
+            Content::Rect(rect) => rect.paint_on(painter)?,
+            Content::Path(path) => {
+                paint_with_measure_on(path, self.measured_paths.get(&path.d), painter)?
+            }
+            Content::Label { rgb, underline, .. } if self.text.contains_key(content) => self.text
+                [content]
+                .paint_on(*rgb, ranges.unwrap_or(&[]), underline.as_ref(), painter)?,
+            Content::Label {
+                text: value,
+                font,
+                size,
+                width,
+                rgb,
+                underline,
+            } => {
+                // A type-on prefix is shaped for this sample only, as the CPU painter does.
+                let face = match self.faces.entry(font.clone()) {
+                    std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(text::load_face(font)?)
+                    }
+                };
+                text::ShapedLabel::new(&value.full_text(), font, face.clone(), *size, *width)?
+                    .paint_decorated_on(
+                        |_| text::GlyphStyle {
+                            rgba: [rgb[0], rgb[1], rgb[2], 255],
+                            offset: [0.; 2],
+                        },
+                        underline.as_ref(),
+                        painter,
+                    )?
+            }
+            _ => return Ok(None),
+        }))
     }
 }
 

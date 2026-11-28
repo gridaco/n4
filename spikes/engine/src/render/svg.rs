@@ -3,7 +3,7 @@ use super::path::{StrokeCap, StrokeJoin, parse_geometry, rasterize, set_stroke};
 use crate::{MAX_SURFACE_DIMENSION, graphics::Raster};
 use anyhow::{Context, Result, bail, ensure};
 use roxmltree::Node;
-use skia_safe::{Canvas, Color, Paint, Shader, TileMode};
+use skia_safe::{Canvas, Color, Color4f, Paint, Shader, TileMode, gradient};
 use std::{collections::HashMap, fs, path::Path};
 
 fn color(value: &str) -> Result<Color> {
@@ -135,12 +135,11 @@ fn gradients(root: Node<'_, '_>) -> Result<HashMap<String, Shader>> {
                 ));
             }
             ensure!(colors.len() >= 2, "gradient needs at least two stops");
-            let shader = Shader::linear_gradient(
+            let colors: Vec<_> = colors.into_iter().map(Color4f::from).collect();
+            let stops = gradient::Colors::new(&colors, Some(&offsets), TileMode::Clamp, None);
+            let shader = gradient::shaders::linear_gradient(
                 points,
-                colors.as_slice(),
-                offsets.as_slice(),
-                TileMode::Clamp,
-                None,
+                &gradient::Gradient::new(stops, gradient::Interpolation::default()),
                 None,
             )
             .context("create linear gradient")?;

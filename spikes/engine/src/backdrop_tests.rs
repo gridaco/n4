@@ -105,9 +105,25 @@ fn cropped_gaussian_matches_full_plate_convolution_through_fractional_mask() -> 
     )?;
     let mut svg_card = adjustment(gaussian(), 1.25, card);
     svg_card["mask"]["content"] = json!({"type":"svg","source":svg});
+    // An SVG is painted on the CPU and a path on the device: the same picture on one painter,
+    // and within a rounding step of each other on the default pair.
+    let cpu = Gpu::reference()?;
     assert_eq!(
-        picture(&gpu, size, &plate, json!([svg_card]), None)?,
-        blurred
+        picture(&cpu, size, &plate, json!([svg_card.clone()]), None)?,
+        picture(
+            &cpu,
+            size,
+            &plate,
+            json!([adjustment(gaussian(), 1.25, card)]),
+            None
+        )?
+    );
+    assert_eq!(
+        crate::render::skia_gpu::bytes_beyond_edge_rounding(
+            &picture(&gpu, size, &plate, json!([svg_card]), None)?,
+            &blurred,
+        ),
+        0
     );
     for y in 0..size[1] {
         for x in 0..size[0] {

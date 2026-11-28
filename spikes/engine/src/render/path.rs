@@ -5,6 +5,7 @@ use crate::{
     graphics::Raster,
     render::channels::{AnimatedScalar, Scalar},
     render::curve::{CurveEase, CurvePoint, PathData},
+    render::skia_gpu::{Cpu, Painter},
 };
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -307,7 +308,7 @@ impl MeasuredPath {
                 let b = (end - offset).min(f64::from(length)) as f32;
                 if a < b {
                     ensure!(
-                        contour.segment(a, b, &mut builder, true),
+                        contour.get_segment(a, b, &mut builder, true),
                         "could not extract stroke interval"
                     );
                     if a == 0. && b == length && contour.is_closed() {
@@ -317,7 +318,7 @@ impl MeasuredPath {
             }
             offset = next;
         }
-        Ok(builder.detach(None))
+        Ok(builder.detach())
     }
 }
 
@@ -351,11 +352,12 @@ pub(super) fn prepare_geometry(
     if let Some(brush) = &stroke
         && !stroke_path.is_empty()
     {
-        let mut outline = SkPath::new();
+        let mut outline = PathBuilder::new();
         ensure!(
             path_utils::fill_path_with_paint(stroke_path, brush, &mut outline, None, None),
             "could not bound path stroke"
         );
+        let outline = outline.detach();
         ensure!(outline.is_finite(), "invalid stroked path geometry");
         bounds.join(outline.compute_tight_bounds());
     }
@@ -527,7 +529,15 @@ pub(crate) fn paint_with_measure(
     path: &NativePath,
     measured: Option<&MeasuredPath>,
 ) -> Result<Raster> {
-    paint_prepared(prepare_path(path, path.stroke.as_ref(), measured)?)
+    paint_with_measure_on(path, measured, &mut Cpu)
+}
+
+pub(crate) fn paint_with_measure_on<P: Painter>(
+    path: &NativePath,
+    measured: Option<&MeasuredPath>,
+    painter: &mut P,
+) -> Result<P::Picture> {
+    paint_prepared_on(prepare_path(path, path.stroke.as_ref(), measured)?, painter)
 }
 
 #[cfg(feature = "host-audio")]
@@ -536,8 +546,15 @@ pub(super) fn prepared_bounds(p: &PreparedPath) -> Result<([i32; 2], [u32; 2])> 
 }
 
 pub(super) fn paint_prepared(p: PreparedPath) -> Result<Raster> {
+    paint_prepared_on(p, &mut Cpu)
+}
+
+pub(super) fn paint_prepared_on<P: Painter>(
+    p: PreparedPath,
+    painter: &mut P,
+) -> Result<P::Picture> {
     let (origin, size) = raster_box(p.bounds)?;
-    rasterize(size, origin, |canvas| {
+    painter.paint(size, origin, |canvas| {
         if let Some(fill) = p.fill {
             canvas.draw_path(&p.geometry, &fill);
         }

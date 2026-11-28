@@ -7,7 +7,7 @@ use crate::{
 };
 use anyhow::{Context, Result, ensure};
 use skia_safe::{
-    AlphaType, BlendMode, Canvas, Color, ColorType, Font, FontMgr, GlyphId, ImageInfo, Paint,
+    AlphaType, BlendMode, Canvas, Color, ColorType, Data, Font, FontMgr, GlyphId, ImageInfo, Paint,
     Point, Rect, Typeface,
     canvas::SaveLayerRec,
     color_filters, surfaces,
@@ -62,7 +62,7 @@ pub(crate) fn load_face(font_path: &Path) -> Result<Typeface> {
     let bytes = fs::read(font_path)
         .with_context(|| format!("read paragraph font {}", font_path.display()))?;
     FontMgr::new()
-        .new_from_data(&bytes, 0)
+        .new_from_data(Data::new_copy(&bytes), None)
         .with_context(|| format!("decode paragraph font {}", font_path.display()))
 }
 
@@ -379,23 +379,22 @@ impl ShapedLabel {
         style_for: impl Fn(Range<usize>) -> GlyphStyle,
         underline: Option<&Underline>,
     ) -> Result<crate::graphics::Raster> {
+        self.paint_decorated_on(style_for, underline, &mut super::skia_gpu::Cpu)
+    }
+
+    pub(crate) fn paint_decorated_on<P: super::skia_gpu::Painter>(
+        &self,
+        style_for: impl Fn(Range<usize>) -> GlyphStyle,
+        underline: Option<&Underline>,
+        painter: &mut P,
+    ) -> Result<P::Picture> {
         if let Some(u) = underline {
             u.validate()?;
         }
         let (origin, extent, styles) = self.measure_styles(style_for, underline)?;
-        let min = origin.map(|v| v as f32);
-        let info = ImageInfo::new(
-            (extent[0] as i32, extent[1] as i32),
-            ColorType::RGBA8888,
-            AlphaType::Premul,
-            None,
-        );
-        let mut rgba = super::transparent_pixels(info.compute_min_byte_size())
-            .context("allocate shaped label")?;
-        {
-            let mut surface = surfaces::wrap_pixels(&info, &mut rgba, None, None)
-                .context("create shaped label surface")?;
-            let canvas = surface.canvas();
+        // The painter moves the canvas to the surface's origin.
+        let min = [0.; 2];
+        painter.paint(extent, origin, |canvas| {
             let mut brush = Paint::default();
             if let Some(Underline::Dotted {
                 rgba: [r, g, b, a],
@@ -433,11 +432,7 @@ impl ShapedLabel {
                     start = end;
                 }
             }
-        }
-        Ok(crate::graphics::Raster {
-            origin,
-            size: extent,
-            rgba,
+            Ok(())
         })
     }
 

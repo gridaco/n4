@@ -219,6 +219,20 @@ impl PreparedText {
         )
     }
 
+    pub(super) fn paint_on<P: crate::render::skia_gpu::Painter>(
+        &self,
+        rgb: [u8; 3],
+        ranges: &[SampledRange],
+        underline: Option<&super::Underline>,
+        painter: &mut P,
+    ) -> Result<P::Picture> {
+        self.shape.paint_decorated_on(
+            |bytes| glyph_style(&self.index.boundaries, rgb, ranges, bytes),
+            underline,
+            painter,
+        )
+    }
+
     #[cfg(feature = "host-audio")]
     pub(super) fn geometry(
         &self,

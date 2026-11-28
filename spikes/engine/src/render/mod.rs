@@ -6,6 +6,7 @@ pub(crate) mod image;
 pub(crate) mod path;
 pub(crate) mod path_trace;
 pub(crate) mod rect;
+pub(crate) mod skia_gpu;
 pub(crate) mod svg;
 pub(crate) mod text;
 

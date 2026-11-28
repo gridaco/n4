@@ -180,7 +180,10 @@ impl<'a> Timeline<'a> {
         let total = project.duration()?;
         ensure!(total > 0, "timeline requires at least one frame");
         let face = FontMgr::new()
-            .new_from_data(include_bytes!("../../../fixtures/fonts/N4GridSans.ttf"), 0)
+            .new_from_data(
+                skia_safe::Data::new_copy(include_bytes!("../../../fixtures/fonts/N4GridSans.ttf")),
+                None,
+            )
             .context("load timeline UI font")?;
         let small = Font::new(face.clone(), 10.5);
         let mut start = 0;
@@ -505,7 +508,7 @@ impl<'a> Timeline<'a> {
                         .line_to((4., 43.))
                         .line_to((16., 35.5))
                         .close();
-                    c.draw_path(&path.detach(None), &brush(TEXT));
+                    c.draw_path(&path.detach(), &brush(TEXT));
                     fill(c, 24., 28., 4., 15., TEXT);
                     fill(c, 31., 28., 4., 15., TEXT);
                 },

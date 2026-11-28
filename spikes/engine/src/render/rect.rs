@@ -199,6 +199,13 @@ impl NativeRect {
         paint_prepared(self.prepare()?)
     }
 
+    pub(crate) fn paint_on<P: super::skia_gpu::Painter>(
+        &self,
+        painter: &mut P,
+    ) -> Result<P::Picture> {
+        super::path::paint_prepared_on(self.prepare()?, painter)
+    }
+
     #[cfg(feature = "host-audio")]
     pub(crate) fn paint_bounds(&self) -> Result<([i32; 2], [u32; 2])> {
         super::path::prepared_bounds(&self.prepare()?)

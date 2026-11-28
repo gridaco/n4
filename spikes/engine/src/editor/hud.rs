@@ -115,7 +115,7 @@ fn outline(raster: &Canvas, quad: Quad, origin: [u32; 2], hover: bool) {
         }
     }
     path.close();
-    let path = path.detach(None);
+    let path = path.detach();
     let mut paint = Paint::default();
     paint.set_anti_alias(true);
     paint.set_style(paint::Style::Stroke);

@@ -78,6 +78,8 @@ pub(crate) struct Gpu {
     shadow_tint: wgpu::RenderPipeline,
     source_blurs: RefCell<source_blur::Cache>,
     spatial: RefCell<Option<spatial::SpatialPass>>,
+    /// Present only in a build with the `skia-gpu` feature, unless switched off at run time.
+    skia: Option<RefCell<super::skia_gpu::SkiaGpu>>,
 }
 
 const TARGET_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
@@ -107,6 +109,16 @@ struct CachedEffect {
 
 impl Gpu {
     pub(crate) fn new() -> Result<Self> {
+        Self::with_painter(true)
+    }
+
+    /// Vector artwork painted on the CPU and uploaded: the reference for the device painter.
+    #[cfg(test)]
+    pub(crate) fn reference() -> Result<Self> {
+        Self::with_painter(false)
+    }
+
+    fn with_painter(on_device: bool) -> Result<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             compatible_surface: None,
@@ -159,7 +171,13 @@ impl Gpu {
             Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
             EffectLayout::Sampled(1),
         )?;
+        let skia = if on_device {
+            super::skia_gpu::SkiaGpu::new(&device, &queue)?.map(RefCell::new)
+        } else {
+            None
+        };
         Ok(Self {
+            skia,
             source_history: Default::default(),
             background_pipeline,
             background: RefCell::new(None),
@@ -1581,6 +1599,16 @@ impl ScenePainter<'_> {
             self.stats.raster_hits += 1;
             return Ok(art.clone());
         }
+        if let Some(skia) = &self.gpu.skia
+            && let Some(art) = self
+                .cache
+                .draw_static_on(content, &mut *skia.borrow_mut())?
+        {
+            self.cache.textures.insert(content.clone(), art.clone());
+            self.stats.raster_paints += 1;
+            self.stats.graphic_uploads += 1;
+            return Ok(art);
+        }
         let raster = self.cache.raster(content, self.stats)?;
         let texture = self.gpu.upload(
             raster.size[0],
@@ -1600,8 +1628,9 @@ impl ScenePainter<'_> {
         content: &Content,
         text: Option<(&[graphics::TextAnimator], u32, f64)>,
     ) -> Result<(wgpu::Texture, [i32; 2])> {
+        let mut skia = self.gpu.skia.as_ref().map(RefCell::borrow_mut);
         self.cache
-            .sample_texture(content, text, self.stats, |raster| {
+            .sample_texture(content, text, self.stats, skia.as_deref_mut(), |raster| {
                 self.gpu.upload(
                     raster.size[0],
                     raster.size[1],
@@ -2295,13 +2324,33 @@ mod tests {
         });
         assert_eq!(run(&leaf)?.0, reference);
         group.mask.as_mut().unwrap().content = MaskContent::Svg { source: svg };
-        assert_eq!(run(&group)?.0, reference);
+        // An SVG is painted on the CPU and a path on the device. On one painter the two masks
+        // give the same picture. On the default pair only fractional corners differ.
+        let cpu = Gpu::reference()?;
+        let mut cpu_cache = PaintCache::default();
+        let mut on_cpu = |layer: &Graphic| {
+            cpu.compose_scene(
+                [20, 15],
+                &plate,
+                None,
+                std::slice::from_ref(layer),
+                0,
+                &mut cpu_cache,
+            )
+        };
+        assert_eq!(on_cpu(&group)?.0, on_cpu(&expected)?.0);
+        let corners =
+            super::super::skia_gpu::bytes_beyond_edge_rounding(&run(&group)?.0, &reference);
+        // Two corner pixels, three colour channels each.
+        assert!(corners <= 6, "{corners} bytes differ beyond edge rounding");
 
         group.position = [2, 1];
         expected.position = [-1, -1];
         let clipped = run(&expected)?.0;
         let (moved_group, stats) = run(&group)?;
-        assert_eq!(clipped, moved_group);
+        // The group still carries the SVG mask: exact on one painter, as above.
+        assert_eq!(on_cpu(&group)?.0, on_cpu(&expected)?.0);
+        assert!(super::super::skia_gpu::bytes_beyond_edge_rounding(&clipped, &moved_group) <= 6);
         assert_eq!(stats.graphic_uploads, 0);
 
         // Fractional input alpha throughout the interior, independent of edge AA.
