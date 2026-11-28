@@ -11,6 +11,8 @@ mod shadow;
 mod source_blur;
 mod source_effects;
 pub(crate) mod spatial;
+#[cfg(test)]
+mod timed_alpha_tests;
 use effect_layout::EffectLayout;
 use source_effects::{PreparedSource, SourceFeatures};
 
@@ -20,6 +22,7 @@ use crate::graphics::{
     self, Blend, Content, Exposure, Graphic, ObjectMatte, PaintCache, PaintStats, SampleTime,
     SampledGrade, SourceEffect,
 };
+use crate::media::{DecodedFrame, FrameAlpha};
 use anyhow::{Context, Result, ensure};
 use std::{
     cell::RefCell,
@@ -30,9 +33,34 @@ use std::{
 };
 use wgpu::util::DeviceExt;
 
-/// Pixel data at this boundary is RGBA8 with sRGB transfer. The background is
-/// opaque. Painter output has coverage premultiplied in encoded space.
+/// Title-overlay bytes carry coverage premultiplied in encoded sRGB.
 pub(crate) type Overlay<'a> = (&'a [u8], u32, u32, i32, i32, f32);
+
+/// Interpretation of a single texture load, before transforms, effects or blending.
+/// Values match n4_source_color in linear_premul.wgsl. sRGB texture views already
+/// return linear RGB, while painter textures expose their encoded bytes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u32)]
+enum TexelColor {
+    LinearPremultiplied = 0,
+    SrgbPremultiplied = 1,
+    LinearStraight = 2,
+}
+
+impl From<FrameAlpha> for TexelColor {
+    fn from(alpha: FrameAlpha) -> Self {
+        match alpha {
+            FrameAlpha::Opaque => Self::LinearPremultiplied,
+            FrameAlpha::Straight => Self::LinearStraight,
+        }
+    }
+}
+
+struct UploadedFrame<'a> {
+    texture: wgpu::Texture,
+    frame: &'a DecodedFrame,
+}
+
 type VideoLayerKey<'a> = (&'a Path, [u32; 2], u32);
 
 pub(crate) struct Gpu {
@@ -597,15 +625,18 @@ impl Gpu {
             | wgpu::TextureUsages::TEXTURE_BINDING;
         let mut commands = self.device.create_command_encoder(&Default::default());
         let immutable_plate = matches!(primary, PrimaryPicture::Background(_));
-        let video_pixels = match primary {
-            PrimaryPicture::Decoded(bytes) | PrimaryPicture::DecodedHistory(bytes, _) => {
-                Some(bytes)
+        let video_frame = match primary {
+            PrimaryPicture::Decoded(frame) | PrimaryPicture::DecodedHistory(frame, _) => {
+                Some(frame)
             }
             _ => None,
         };
+        let plate_color =
+            video_frame.map_or(TexelColor::LinearPremultiplied, |frame| frame.alpha.into());
+        let transparent_plate = plate_color == TexelColor::LinearStraight;
         let video = match primary {
-            PrimaryPicture::Decoded(bytes) | PrimaryPicture::DecodedHistory(bytes, _) => {
-                self.upload(width, height, bytes, TARGET_FORMAT, usage)?
+            PrimaryPicture::Decoded(frame) | PrimaryPicture::DecodedHistory(frame, _) => {
+                self.upload(width, height, &frame.rgba, TARGET_FORMAT, usage)?
             }
             #[cfg(test)]
             PrimaryPicture::Video(bytes) => {
@@ -616,31 +647,32 @@ impl Gpu {
             }
         };
         let history = match primary {
-            PrimaryPicture::DecodedHistory(bytes, previous) => {
-                Some(self.prepare_history(&mut commands, &video, bytes, previous)?)
+            PrimaryPicture::DecodedHistory(frame, previous) => {
+                Some(self.prepare_history(&mut commands, &video, &frame.rgba, previous)?)
             }
             _ => None,
         };
         let mut video_textures = HashMap::with_capacity(video_layers.len());
-        for (&key, pixels) in video_layers {
+        for (&key, frame) in video_layers {
             let (_, [w, h], _) = key;
             let texture = self.upload(
                 w,
                 h,
-                pixels,
+                &frame.rgba,
                 TARGET_FORMAT,
                 wgpu::TextureUsages::TEXTURE_BINDING,
             )?;
-            video_textures.insert(key, texture);
+            video_textures.insert(key, UploadedFrame { texture, frame });
         }
         // Use a separate output when sampling the plate, or when the pristine
         // input has to be restored before the next exposure sample.
-        // The decoded plate is opaque. A plain backmost placement is already
+        // A known opaque plate with a plain backmost placement is already
         // present in that texture, so it can seed the scope without a fullscreen draw.
         let camera_plate =
             !immutable_plate && matches!(camera, Some(crate::camera::Camera::Orthographic { .. }));
+        let draw_plate = camera_plate || transparent_plate;
         let first_scope = scopes.iter_mut().find(|(layers, _)| !layers.is_empty());
-        let backmost_plate = !camera_plate
+        let backmost_plate = !draw_plate
             && first_scope.as_ref().is_some_and(|(layers, clock)| {
                 let layer = &layers[0];
                 matches!(layer.content, Content::Footage { history: None })
@@ -677,7 +709,7 @@ impl Gpu {
         let seed_with_plate = backmost_plate || !samples_original;
         let paints = scopes.iter().any(|(layers, _)| !layers.is_empty()) || overlay.is_some();
         let separate_target =
-            camera_plate || samples_original || exposure.is_some() || (immutable_plate && paints);
+            draw_plate || samples_original || exposure.is_some() || (immutable_plate && paints);
         let target = if separate_target {
             self.render_texture("composited picture", video.size())
         } else {
@@ -724,7 +756,7 @@ impl Gpu {
             );
             let view_transform =
                 camera.and_then(|camera| camera.affine(shot_time, [width, height]));
-            if camera_plate && seed_with_plate {
+            if draw_plate && seed_with_plate {
                 Self::clear(&mut commands, &target, wgpu::Color::BLACK);
                 self.paint(
                     &mut commands,
@@ -740,7 +772,7 @@ impl Gpu {
                         wipe_right: None,
                         opacity: 1.,
                         amount: 0.,
-                        encoded: false,
+                        color: plate_color,
                         blur: None,
                         grades: &[],
                         object_mattes: None,
@@ -769,8 +801,7 @@ impl Gpu {
                     history: history.as_ref(),
                     video: &video,
                     video_layers: &video_textures,
-                    video_pixels,
-                    video_layer_pixels: video_layers,
+                    video_frame,
                     time: SampleTime::at(clock, exposure, index),
                     cache,
                     stats: &mut stats,
@@ -798,7 +829,7 @@ impl Gpu {
                         wipe_right: None,
                         opacity: *opacity,
                         amount: 0.,
-                        encoded: true,
+                        color: TexelColor::SrgbPremultiplied,
                         blur: None,
                         grades: &[],
                         object_mattes: None,
@@ -1025,7 +1056,7 @@ impl Gpu {
                     (my as i32).to_le_bytes(),
                     draw.opacity.to_le_bytes(),
                     draw.amount.to_le_bytes(),
-                    u32::from(draw.encoded).to_le_bytes(),
+                    (draw.color as u32).to_le_bytes(),
                     u32::from(draw.mask.is_some()).to_le_bytes(),
                     u32::from(draw.transform.is_some()).to_le_bytes(),
                     draw.wipe_right
@@ -1228,7 +1259,7 @@ impl Gpu {
 pub(crate) struct FrameInputs<'a> {
     pub size: [u32; 2],
     pub primary: PrimaryPicture<'a>,
-    pub video_layers: &'a HashMap<VideoLayerKey<'a>, Arc<Vec<u8>>>,
+    pub video_layers: &'a HashMap<VideoLayerKey<'a>, DecodedFrame>,
     pub overlay: Option<Overlay<'a>>,
     /// Ordered artwork and the frame in each owning shot or placement.
     pub scopes: Vec<(&'a [Graphic], u32)>,
@@ -1237,8 +1268,8 @@ pub(crate) struct FrameInputs<'a> {
 pub(crate) enum PrimaryPicture<'a> {
     #[cfg(test)]
     Video(&'a [u8]),
-    Decoded(&'a Arc<Vec<u8>>),
-    DecodedHistory(&'a Arc<Vec<u8>>, &'a [Option<Arc<Vec<u8>>>]),
+    Decoded(&'a DecodedFrame),
+    DecodedHistory(&'a DecodedFrame, &'a [Option<Arc<Vec<u8>>>]),
     Background(&'a crate::project::Background),
 }
 
@@ -1256,7 +1287,7 @@ struct Draw<'a> {
     wipe_right: Option<i64>,
     opacity: f32,
     amount: f32,
-    encoded: bool,
+    color: TexelColor,
     blur: Option<(&'a wgpu::Texture, graphics::SampledSourceBlur)>,
     grades: &'a [SampledGrade],
     object_mattes: Option<&'a wgpu::Texture>,
@@ -1537,9 +1568,8 @@ struct ScenePainter<'a> {
     history: Option<&'a history::Window>,
     commands: &'a mut wgpu::CommandEncoder,
     video: &'a wgpu::Texture,
-    video_pixels: Option<&'a Arc<Vec<u8>>>,
-    video_layer_pixels: &'a HashMap<VideoLayerKey<'a>, Arc<Vec<u8>>>,
-    video_layers: &'a HashMap<VideoLayerKey<'a>, wgpu::Texture>,
+    video_frame: Option<&'a DecodedFrame>,
+    video_layers: &'a HashMap<VideoLayerKey<'a>, UploadedFrame<'a>>,
     time: SampleTime,
     cache: &'a mut PaintCache,
     stats: &'a mut PaintStats,
@@ -1627,7 +1657,7 @@ impl ScenePainter<'_> {
                 .as_ref()
                 .map_or(&[][..], |f| f.mattes.as_slice());
             let mut object_mattes = None;
-            let (source, artwork_origin, encoded) = match content.as_ref() {
+            let (source, artwork_origin, color) = match content.as_ref() {
                 Content::TransformGroup { children } => {
                     self.layers(children, target, origin, transform, frame)?;
                     continue;
@@ -1639,22 +1669,35 @@ impl ScenePainter<'_> {
                 Content::Scene3d(scene) => {
                     let (beauty, masks) = self.spatial_source(scene, target, frame, mattes)?;
                     object_mattes = masks;
-                    (beauty, origin, false)
+                    (beauty, origin, TexelColor::LinearPremultiplied)
                 }
-                Content::Footage { history: None } => (self.video.clone(), origin, false),
+                Content::Footage { history: None } => (
+                    self.video.clone(),
+                    origin,
+                    self.video_frame
+                        .map_or(TexelColor::LinearPremultiplied, |frame| frame.alpha.into()),
+                ),
                 Content::Footage {
                     history: Some(history),
-                } => (self.temporal_source(history)?, origin, false),
+                } => (
+                    self.temporal_source(history)?,
+                    origin,
+                    TexelColor::LinearPremultiplied,
+                ),
                 Content::Video(clip) => {
                     let Some(tick) = clip.source_frame(self.time.frame) else {
                         continue;
                     };
                     let key = (clip.source.as_path(), clip.size, tick);
-                    let texture = self
+                    let uploaded = self
                         .video_layers
                         .get(&key)
                         .context("missing decoded frame for active video layer")?;
-                    (texture.clone(), origin, false)
+                    (
+                        uploaded.texture.clone(),
+                        origin,
+                        uploaded.frame.alpha.into(),
+                    )
                 }
                 Content::Group { children } => {
                     // Isolate in destination coordinates. A child can be at a
@@ -1663,7 +1706,7 @@ impl ScenePainter<'_> {
                         .gpu
                         .blank(self.commands, target, wgpu::Color::TRANSPARENT);
                     self.layers(children, &group, origin, transform, frame)?;
-                    (group, [0; 2], false)
+                    (group, [0; 2], TexelColor::LinearPremultiplied)
                 }
                 _ => {
                     let animation = (!layer.text_animators.is_empty()).then_some((
@@ -1677,7 +1720,11 @@ impl ScenePainter<'_> {
                         } else {
                             self.raster_texture(&content)?
                         };
-                    (texture, translated(origin, local_origin), true)
+                    (
+                        texture,
+                        translated(origin, local_origin),
+                        TexelColor::SrgbPremultiplied,
+                    )
                 }
             };
             let mut wipe_right = None;
@@ -1717,7 +1764,7 @@ impl ScenePainter<'_> {
             {
                 continue;
             }
-            let mut prepared = PreparedSource::new(source, encoded);
+            let mut prepared = PreparedSource::new(source, color);
             self.source_effects(
                 &mut prepared,
                 layer,
@@ -1758,7 +1805,7 @@ impl ScenePainter<'_> {
                 wipe_right,
                 opacity,
                 amount,
-                encoded: prepared.encoded,
+                color: prepared.color,
                 blur: prepared.blur_input(),
                 grades: &prepared.grades,
                 object_mattes: object_mattes.as_ref(),

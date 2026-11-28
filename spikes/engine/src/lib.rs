@@ -22,12 +22,12 @@ mod backdrop_tests;
 #[cfg(test)]
 mod shadow_tests;
 
-use anyhow::{Context, Result, ensure};
-use media::IndexedVideo;
+use anyhow::{Context, Result};
+use media::{IndexedVideo, assets::SourceProfiles};
 use render::{gpu::Gpu, text};
 use serde::Serialize;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 pub use plan::{CameraSelection, FrameRequest, OverlayFrameRequest, VideoFrameRequest};
@@ -81,13 +81,16 @@ impl Engine {
 
     fn new_with_artwork(
         mut project: Project,
-        svg_assets: Option<&graphics::PreparedSvgAssets>,
+        raster_assets: Option<&graphics::PreparedRasterAssets>,
         text_layouts: Option<&graphics::PreparedTextLayouts>,
     ) -> Result<Self> {
         project.validate()?;
         let mut graphics = graphics::PaintCache::default();
-        if let Some(assets) = svg_assets {
-            graphics.install_svg_assets(assets);
+        if let Some(assets) = raster_assets {
+            graphics.install_raster_assets(assets);
+        } else {
+            graphics
+                .install_raster_assets(&graphics::PreparedRasterAssets::prepare_pinned(&project)?);
         }
         if let Some(layouts) = text_layouts {
             graphics.install_text_layouts(layouts);
@@ -98,7 +101,9 @@ impl Engine {
         Gpu::validate_backdrop_scratch(&project, &graphics)?;
         Gpu::validate_shadow_scratch(&project, &graphics)?;
         Gpu::validate_source_blur_scratch(&project, &graphics)?;
-        let sources = prepare_sources(&project, &HashMap::new(), true)?;
+        let sources = graphics
+            .animations
+            .profiles(&project, &HashMap::new(), true)?;
         let gpu = Gpu::new()?;
         for layers in project.graphic_scopes() {
             gpu.validate_effects(layers, &mut graphics, project.size)?;
@@ -165,13 +170,18 @@ impl Engine {
         } else {
             None
         };
-        let source_changes = if !same_profile {
-            Some(prepare_sources(&next, &HashMap::new(), true)?)
-        } else if self.project.shots != next.shots || graphics_changed {
-            Some(prepare_sources(&next, &self.sources, true)?)
-        } else {
-            None
-        };
+        let source_changes =
+            if !same_profile || self.project.shots != next.shots || graphics_changed {
+                let animations = media::assets::PreparedAnimations::prepare(&next, |_| {
+                    Some(&self.graphics.animations)
+                })?;
+                let empty = SourceProfiles::new();
+                let existing = if same_profile { &self.sources } else { &empty };
+                let profiles = animations.profiles(&next, existing, true)?;
+                Some((animations, profiles))
+            } else {
+                None
+            };
         if (graphics_changed || !same_profile)
             && let Err(error) = next.graphic_scopes().try_for_each(|scope| {
                 self.gpu
@@ -183,7 +193,8 @@ impl Engine {
             self.graphics.retain(&self.project);
             return Err(error);
         }
-        if let Some(new) = source_changes {
+        if let Some((animations, new)) = source_changes {
+            self.graphics.animations = animations;
             // Artwork on a material can sample footage. Its authored layers can be
             // identical while its decoded frame changes with the output/source profile.
             if !same_profile
@@ -336,7 +347,7 @@ impl Engine {
             // Read the window in presentation order so a cold seek can decode forward once.
             for entry in request.source_history.iter().rev() {
                 let prior = if let Some(tick) = entry {
-                    Some(self.reader.read(source, *tick)?.0)
+                    Some(self.reader.read(source, *tick)?.0.rgba)
                 } else {
                     None
                 };
@@ -426,10 +437,6 @@ impl Engine {
     }
 }
 
-// Decode profiles own their scale filter and cache identity. One asset can be a
-// full-frame shot and a small inset in the very same output frame.
-type SourceProfiles = HashMap<(PathBuf, [u32; 2]), Arc<IndexedVideo>>;
-
 struct RequestSources<'a> {
     primary: Option<&'a IndexedVideo>,
     /// Each layer's index and authored tick, in paint order.
@@ -476,46 +483,15 @@ fn resolve_request_sources<'a>(
     Ok(RequestSources { primary, layers })
 }
 
-fn prepare_sources(
-    project: &Project,
-    existing: &SourceProfiles,
-    include_layers: bool,
-) -> Result<SourceProfiles> {
-    let mut profiles = SourceProfiles::new();
-    let mut add = |path: &Path, size: [u32; 2], start: u32, duration: u32| -> Result<()> {
-        use std::collections::hash_map::Entry;
-        let index = match profiles.entry((path.to_owned(), size)) {
-            Entry::Occupied(e) => e.into_mut(),
-            Entry::Vacant(e) => {
-                let index = if let Some(existing) = existing.get(e.key()) {
-                    existing.clone()
-                } else {
-                    Arc::new(
-                        IndexedVideo::open(path, size[0], size[1], project.fps)
-                            .with_context(|| format!("open {}", path.display()))?,
-                    )
-                };
-                e.insert(index)
-            }
-        };
-        ensure!(
-            start
-                .checked_add(duration)
-                .is_some_and(|end| end <= index.frame_count()),
-            "trim exceeds available frames in {}",
-            path.display()
-        );
-        Ok(())
-    };
-    for shot in &project.shots {
-        if let Some(source) = &shot.source {
-            add(source, project.size, shot.source_in, shot.duration)?;
-        }
+/// Fallibly allocate a zeroed buffer with a bulk clear, also in debug builds.
+pub(crate) fn zeroed_bytes(len: usize) -> Result<Vec<u8>, std::collections::TryReserveError> {
+    let mut pixels = Vec::<u8>::new();
+    pixels.try_reserve_exact(len)?;
+    // SAFETY: the reservation provides len writable bytes; zero initializes every u8
+    // before the vector's length is published or any caller can read the surface.
+    unsafe {
+        pixels.as_mut_ptr().write_bytes(0, len);
+        pixels.set_len(len);
     }
-    if include_layers {
-        for layer in project.video_clips() {
-            add(&layer.source, layer.size, layer.source_in, layer.duration)?;
-        }
-    }
-    Ok(profiles)
+    Ok(pixels)
 }

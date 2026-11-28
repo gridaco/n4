@@ -447,9 +447,8 @@ impl EditorSession {
 
     fn geometry_assets(&self) -> geometry::GeometryAssets<'_> {
         geometry::GeometryAssets {
-            svg: &self.viewer.snapshot.svg_assets,
+            rasters: &self.viewer.snapshot.raster_assets,
             text: &self.viewer.snapshot.text_layouts,
-            images: &self.viewer.snapshot.image_assets,
             canvas: self.project().size,
             native: &self.coverage_cache,
         }

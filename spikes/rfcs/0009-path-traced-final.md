@@ -32,7 +32,7 @@ Three kinds of picture the rasterizer cannot make: a softbox whose size shapes b
 
 ## Contract
 
-**A finished picture is identified by content, not by location.** The key hashes the authored scene with every file it names replaced by a digest of that file's bytes, the scene's frame and sub-frame, the camera, the output size, the imported geometry, materials and textures, the requested mattes, the Cycles device, release and bridge revision. A surface that shows video, a wipe or a periodic shader is also keyed on the shot's clock, because those are sampled on it. [`final_key`](../engine/src/render/gpu/spatial.rs)
+**A finished picture is identified by content, not by location.** The key hashes the authored scene with file references identified by content (accepted dimensions and pixels for pinned still images, file bytes for other surface inputs), the scene's frame and sub-frame, the camera, the output size, the imported geometry, materials and textures, the requested mattes, the Cycles device, release and bridge revision. A surface that shows video, a wipe or a periodic shader is also keyed on the shot's clock, because those are sampled on it. [`final_key`](../engine/src/render/gpu/spatial.rs)
 
 The key covers the scene as authored, so it errs toward tracing again: a keyframe changed elsewhere in the scene re-traces frames it does not affect, and sliding a scene whose screen shows video re-traces it.
 

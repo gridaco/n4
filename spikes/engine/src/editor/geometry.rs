@@ -217,7 +217,7 @@ pub(super) fn resolve(
                 &sample,
                 scope_clock,
                 ([0; 2], project.size),
-                assets.svg,
+                assets.rasters,
             )?;
             if clip.constrained() {
                 clips.push(clip);
@@ -244,7 +244,7 @@ pub(super) fn resolve(
         leaf.as_ref().map(|leaf| leaf.raster)
     };
     if let Some(raster) = raster {
-        let clip = sample_clip(layer, &sample, scope_clock, raster, assets.svg)?;
+        let clip = sample_clip(layer, &sample, scope_clock, raster, assets.rasters)?;
         if clip.constrained() {
             clips.push(clip);
         }
@@ -439,7 +439,7 @@ impl Picker<'_> {
                         &sample,
                         scope_clock,
                         ([0; 2], self.assets.canvas),
-                        self.assets.svg,
+                        self.assets.rasters,
                     )?;
                     let clipped;
                     let area = match area {
@@ -504,7 +504,7 @@ impl Picker<'_> {
                 PickArea::Marquee(_) => Coverage::Outside,
             });
         };
-        let clip = sample_clip(layer, sample, scope_clock, leaf.raster, self.assets.svg)?;
+        let clip = sample_clip(layer, sample, scope_clock, leaf.raster, self.assets.rasters)?;
         match area {
             PickArea::Point { at } => {
                 point_coverage(layer, content, &leaf, &clip, *at, self.assets)
@@ -706,7 +706,7 @@ mod tests {
     use super::*;
     use crate::{
         AuthoringDocument, Engine,
-        graphics::{PreparedImageAssets, PreparedSvgAssets, PreparedTextLayouts},
+        graphics::{PreparedRasterAssets, PreparedTextLayouts},
     };
     use std::fs;
 
@@ -752,13 +752,12 @@ mod tests {
         let (document, inputs) = crate::project_watch::ProjectInputs::load(fixture.path())?;
         let inspection = document.inspection()?;
         let project = document.project;
-        let assets = PreparedSvgAssets::prepare(&project, None, &inputs)?;
+        let assets = PreparedRasterAssets::prepare(&project, None, &inputs)?;
         fs::remove_file(source)?;
         let text = PreparedTextLayouts::default();
         let assets = GeometryAssets {
-            svg: &assets,
+            rasters: &assets,
             text: &text,
-            images: &PreparedImageAssets::default(),
             canvas: project.size,
             native: &NativeCoverageCache::default(),
         };
@@ -805,12 +804,11 @@ mod tests {
         let document = AuthoringDocument::load(fixture.path(), None)?;
         let inspection = document.inspection()?;
         let project = document.project;
-        let svg_assets = PreparedSvgAssets::default();
+        let raster_assets = PreparedRasterAssets::default();
         let text = PreparedTextLayouts::default();
         let assets = GeometryAssets {
-            svg: &svg_assets,
+            rasters: &raster_assets,
             text: &text,
-            images: &PreparedImageAssets::default(),
             canvas: project.size,
             native: &NativeCoverageCache::default(),
         };

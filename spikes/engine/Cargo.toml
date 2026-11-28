@@ -38,6 +38,9 @@ anyhow = "1"
 getrandom = { version = "0.4", optional = true }
 clap = { version = "4", features = ["derive"] }
 png = "0.18"
+gif = { version = "0.14.2", default-features = false, features = ["std"] }
+image-webp = "0.2.4"
+moxcms = "0.8.1"
 tempfile = "3"
 pollster = "1"
 serde = { version = "1", features = ["derive"] }

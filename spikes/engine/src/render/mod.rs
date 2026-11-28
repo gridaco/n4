@@ -10,6 +10,7 @@ pub(crate) mod svg;
 pub(crate) mod text;
 
 use crate::graphics::{Content, Graphic, Mask, NativeRect};
+use crate::zeroed_bytes as transparent_pixels;
 use affine::{LayerSpace, SampledTransform};
 
 pub(crate) struct LayerSample {
@@ -57,19 +58,4 @@ impl RasterEnvelope {
             max_size: bounds.1,
         }
     }
-}
-
-/// Allocate a transparent Skia surface, including the unpainted area around each contour.
-/// Use a bulk clear even in the development player: a macro shot can allocate several
-/// million texels for each new pose.
-fn transparent_pixels(len: usize) -> Result<Vec<u8>, std::collections::TryReserveError> {
-    let mut pixels = Vec::<u8>::new();
-    pixels.try_reserve_exact(len)?;
-    // SAFETY: the reservation provides len writable bytes; zero initializes every u8
-    // before the vector's length is published or any caller can read the surface.
-    unsafe {
-        pixels.as_mut_ptr().write_bytes(0, len);
-        pixels.set_len(len);
-    }
-    Ok(pixels)
 }

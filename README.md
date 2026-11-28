@@ -13,7 +13,7 @@ Install the Xcode command-line tools, [Rust via rustup](https://rustup.rs/) and 
 ```sh
 git clone --branch spikes https://github.com/gridaco/n4.git
 cd n4
-brew install just ffmpeg sdl2
+brew install just ffmpeg sdl2 webp
 just demo
 ```
 

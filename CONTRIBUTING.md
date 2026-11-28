@@ -1,6 +1,6 @@
 # Contributing to N4
 
-Use `spikes` as the base branch for changes and pull requests. The alpha target is macOS on Apple Silicon with Metal. Start by opening Signal Atlas through the [quickstart](README.md#run-the-first-film). FFmpeg and SDL2 come from Homebrew. Rustup selects the repository's pinned compiler when Cargo runs under `spikes/`. OpenUSD, Blender and Electron are optional for the first film.
+Use `spikes` as the base branch for changes and pull requests. The alpha target is macOS on Apple Silicon with Metal. Start by opening Signal Atlas through the [quickstart](README.md#run-the-first-film). FFmpeg, SDL2 and libwebp come from Homebrew. Rustup selects the repository's pinned compiler when Cargo runs under `spikes/`. OpenUSD, Blender and Electron are optional for the first film.
 
 ## Make a change
 

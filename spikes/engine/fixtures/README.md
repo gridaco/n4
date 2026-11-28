@@ -11,8 +11,14 @@ The media and authored fixture content in this directory are original N4 work de
 | `fonts/` | N4 Grid Sans is built from [original glyph strokes](fonts/build_font.py), including the shaping test glyphs. |
 | `playback/` | Generates a longer workload with FFmpeg test patterns for optional performance studies. [Instructions](playback/README.md). |
 | `knot-art.json` | Original parameterized cubic-curve articulation data for the geometry regression. |
+| `gif/restore.gif` | The [Python generator](gif/generate.py) writes four original indexed patches on an 8×4 canvas. The temporary green patch tests restoration of both red and transparent pixels. Local palette, background disposal and unequal delays have independent expected values. The bytes and fixture artwork are CC0. |
+| `webp/` | The [generator](webp/generate.py) draws an original 24×16 decal with four alpha levels, builds its linear RGB ICC profile, and flips it for a two-frame animation. The artwork, synthetic profile and generated images are dedicated to CC0. |
 
 For films intended to be edited or watched, open the [canonical examples](../../examples/README.md).
+
+### Regenerate the WebP controls
+
+Run `python3 spikes/engine/fixtures/webp/generate.py` from the repository root. The checked-in bytes were generated with Pillow 11.3.0, libwebp 1.5.0 and LittleCMS 2.17. `decal.png` contains the authored samples. The `opaque-lossy.png` and `alpha-lossy.png` witnesses contain libwebp's decode of each lossy input. `linear-rgb.png` contains LittleCMS's conversion of the linear samples to sRGB. The tests compare every pixel after premultiplying, require exact alpha, and allow one RGB code value for lossy reconstruction or ICC conversion. The two-frame animation also exercises variable holds and color conversion. The original CC0 `patches.webp` paints three 2×2 opaque patches on a 4×2 transparent canvas with 40/80/20 ms holds. After red clears on disposal, the left half must show the footage underneath the green frame. Its container omits the alpha flag.
 
 ### Re-record the browser fixture
 

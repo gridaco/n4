@@ -8,7 +8,7 @@ struct Layer {
     mask_origin: vec2<i32>,
     opacity: f32,
     amount: f32,
-    encoded_premul: u32,
+    source_color: u32,
     masked: u32,
     transformed: u32,
     wipe_right_local: i32,
@@ -27,10 +27,7 @@ fn vertex(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
 }
 
 fn n4_source(dst: vec2<i32>, texel: vec2<i32>) -> vec4<f32> {
-    var color = textureLoad(artwork, texel, 0);
-    if layer.encoded_premul != 0u {
-        color = n4_linear_premul(color);
-    }
+    var color = n4_source_color(textureLoad(artwork, texel, 0), layer.source_color);
     color = n4_grade(n4_blur_mix(dst - layer.origin, texel, color));
     var opacity = layer.opacity;
     if layer.masked != 0u {

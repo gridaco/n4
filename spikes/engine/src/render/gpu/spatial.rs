@@ -188,6 +188,8 @@ impl ScenePainter<'_> {
             identify_files(
                 &mut model["surfaces"],
                 &mut self.cache.file_digests,
+                &self.cache.pinned_images,
+                &self.cache.animations,
                 &mut clocked,
             )?;
         }
@@ -577,12 +579,22 @@ pub(crate) type FileDigests =
 fn identify_files(
     value: &mut serde_json::Value,
     digests: &mut FileDigests,
+    pinned_images: &crate::graphics::PinnedImages,
+    animations: &crate::media::assets::PreparedAnimations,
     clocked: &mut bool,
 ) -> Result<()> {
     use serde_json::Value;
     match value {
         Value::String(text) => {
             let path = std::path::Path::new(text.as_str());
+            if let Some(animation) = animations.get(path) {
+                *text = format!("animation:{:016x}", animation.digest());
+                return Ok(());
+            }
+            if let Some(image) = pinned_images.get(path) {
+                *text = format!("raster:{:016x}", image.final_digest());
+                return Ok(());
+            }
             let Ok(file) = std::fs::metadata(path) else {
                 return Ok(());
             };
@@ -614,7 +626,7 @@ fn identify_files(
         }
         Value::Array(items) => {
             for item in items {
-                identify_files(item, digests, clocked)?;
+                identify_files(item, digests, pinned_images, animations, clocked)?;
             }
         }
         Value::Object(fields) => {
@@ -627,7 +639,7 @@ fn identify_files(
                 || fields.contains_key("wipe")
                 || fields.contains_key("period_frames");
             for item in fields.values_mut() {
-                identify_files(item, digests, clocked)?;
+                identify_files(item, digests, pinned_images, animations, clocked)?;
             }
         }
         _ => {}

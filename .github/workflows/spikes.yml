@@ -25,7 +25,7 @@ jobs:
           package-manager-cache: false
       - name: Install native tools and pinned pnpm
         run: |
-          brew install ffmpeg sdl2
+          brew install ffmpeg sdl2 webp
           npm install --global "$(node -p 'require("./spikes/host/package.json").packageManager')"
       - name: Build CLI, native host and SDL demo player
         working-directory: spikes/engine
@@ -36,6 +36,8 @@ jobs:
           cargo fmt --all --check
           cargo test --locked -p nothing-openusd --no-default-features
           cargo test --locked -p n4-engine --no-default-features --lib project::
+          cargo test --locked -p n4-engine --no-default-features --lib render::image::tests
+          cargo test --locked -p n4-engine --no-default-features --lib media::
           engine/target/debug/n4 validate examples/signal-atlas
       - name: Build the Electron harness and check its headless timeline
         working-directory: spikes/host

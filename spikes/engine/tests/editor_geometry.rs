@@ -150,6 +150,75 @@ fn image_click_area_uses_the_accepted_size_regardless_of_pixel_alpha() -> Result
 }
 
 #[test]
+fn broken_webp_replacement_preserves_cold_frames_thumbnails_and_picking() -> Result<()> {
+    use std::time::{Duration, Instant};
+
+    let folder = tempfile::tempdir()?;
+    let root = folder.path();
+    fs::create_dir(root.join("sequences"))?;
+    fs::write(
+        root.join("project.proj"),
+        "project still fps 24/1 size 120x60\n[0,8) V1 shot\n",
+    )?;
+    fs::write(
+        root.join("sequences/shot.xml"),
+        r##"<sequence background="#ffffff"><image name="Decal" source="art.bin" position="4 4"/></sequence>"##,
+    )?;
+    let asset = root.join("art.bin");
+    fs::copy(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/webp/decal.webp"),
+        &asset,
+    )?;
+    let mut session = EditorSession::open(root)?;
+    let original = session.render(0, 0)?.rgba;
+    let decal = json!({"occurrence":"V1:shot@0", "layers":[0]});
+    assert_eq!(pick(&mut session, 0, 0, [20, 12])?["hits"][0], decal);
+
+    // A complete RIFF envelope and VP8L header for 24×16, with no coded pixels.
+    fs::write(
+        &asset,
+        b"RIFF\x12\0\0\0WEBPVP8L\x05\0\0\0\x2f\x17\xc0\x03\0\0",
+    )?;
+    let reload = || EditorCommand::Reload {
+        revision: 0,
+        discard_changes: false,
+    };
+    assert!(session.dispatch(reload()).is_err());
+    assert_eq!(session.state().revision, 0);
+    assert_eq!(session.render(0, 6)?.rgba, original);
+    assert_eq!(pick(&mut session, 0, 6, [20, 12])?["hits"][0], decal);
+    for placement in [None, Some("V1:shot@0")] {
+        // Both workers open after the source on disk has become unreadable.
+        let ticket = session.viewer_mut().request_thumbnail(5, placement)?;
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let thumb = loop {
+            if let Some(thumb) = ticket.try_take()? {
+                break thumb;
+            }
+            anyhow::ensure!(Instant::now() < deadline, "thumbnail timed out");
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        assert_eq!(thumb.size, [120, 60]);
+        assert!(thumb.rgba == original, "thumbnail {placement:?}");
+    }
+
+    let blue = [0, 0, 255, 255];
+    image_webp::WebPEncoder::new(fs::File::create(&asset)?).encode(
+        &blue.repeat(8),
+        4,
+        2,
+        image_webp::ColorType::Rgba8,
+    )?;
+    session.dispatch(reload())?;
+    assert_eq!(session.state().revision, 1);
+    let repaired = session.render(1, 6)?;
+    assert_eq!(pixel(&repaired, [5, 5]), blue);
+    assert_eq!(pixel(&repaired, [20, 12]), [255; 4]);
+    assert_eq!(pick(&mut session, 1, 6, [20, 12])?["hits"], json!([]));
+    Ok(())
+}
+
+#[test]
 #[ignore = "post-alpha: the picker currently treats RGB grade as unresolved coverage"]
 fn rgb_grade_preserves_canvas_pick_area() -> Result<()> {
     let fixture = tempfile::tempdir()?;

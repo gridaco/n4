@@ -12,7 +12,7 @@ pub use crate::render::path::{FillRule, NativePath, Stroke, StrokeCap, StrokeJoi
 use crate::render::path::{MeasuredPath, paint_path, paint_with_measure, validate_path};
 pub use crate::render::rect::{CornerRadius, CornerValues, NativeRect, RectGeometry, RectLength};
 use crate::render::svg::paint_svg;
-use crate::{MAX_SURFACE_DIMENSION, render::text};
+use crate::{MAX_SURFACE_DIMENSION, media::assets::PreparedAnimations, render::text};
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -927,6 +927,8 @@ pub(crate) struct PaintCache {
     /// Content identity of prepared meshes. Holding the mesh keeps its address from being
     /// reused by a different one.
     pub(crate) mesh_hashes: HashMap<(PathBuf, String), (Arc<nothing_spatial::Mesh>, u64)>,
+    pub(crate) pinned_images: PinnedImages,
+    pub(crate) animations: PreparedAnimations,
     pub(crate) file_digests: crate::render::gpu::spatial::FileDigests,
     pub(crate) live_surfaces: live_surface_cache::LiveSurfaceCache,
     pub(crate) meshes: HashMap<(PathBuf, String), Arc<nothing_spatial::Mesh>>,
@@ -944,14 +946,48 @@ pub(crate) struct PaintCache {
     shaders: HashMap<PathBuf, String>,
 }
 
+/// A decoded picture can be shared by the preview, thumbnail workers and export.
+pub(crate) struct PinnedImage {
+    raster: Arc<Raster>,
+    final_digest: std::sync::OnceLock<u64>,
+}
+
+impl PinnedImage {
+    fn new(raster: Arc<Raster>) -> Arc<Self> {
+        Arc::new(Self {
+            raster,
+            final_digest: Default::default(),
+        })
+    }
+
+    /// Path-traced material keys identify the pixels that this revision actually renders.
+    pub(crate) fn final_digest(&self) -> u64 {
+        use std::hash::Hasher;
+        *self.final_digest.get_or_init(|| {
+            let mut hash = StableHasher::new();
+            for side in self.raster.size {
+                hash.write(&side.to_le_bytes());
+            }
+            hash.write(&self.raster.rgba);
+            hash.finish()
+        })
+    }
+}
+
+pub(crate) type PinnedImages = HashMap<PathBuf, Arc<PinnedImage>>;
+
 /// CPU artwork prepared from the observed inputs of one accepted revision.
 /// GPU textures remain private to each renderer.
 #[derive(Default)]
-pub(crate) struct PreparedSvgAssets {
-    rasters: HashMap<PathBuf, Arc<Raster>>,
+pub(crate) struct PreparedRasterAssets {
+    pub(crate) animations: PreparedAnimations,
+    svg: HashMap<PathBuf, Arc<Raster>>,
+    pinned_images: PinnedImages,
+    #[cfg(feature = "host-audio")]
+    other_sizes: HashMap<PathBuf, [u32; 2]>,
 }
 
-impl PreparedSvgAssets {
+impl PreparedRasterAssets {
     #[cfg(feature = "host-audio")]
     pub(crate) fn prepare(
         project: &crate::Project,
@@ -959,62 +995,79 @@ impl PreparedSvgAssets {
         inputs: &crate::project_watch::ProjectInputs,
     ) -> Result<Self> {
         let mut assets = Self::default();
+        let unchanged = |path: &Path| {
+            previous
+                .filter(|(_, observations)| inputs.same_file(observations, path))
+                .map(|(assets, _)| assets)
+        };
+        assets.animations = PreparedAnimations::prepare(project, |path| {
+            unchanged(path).map(|old| &old.animations)
+        })?;
         for content in sources(project.graphic_scopes()).rasters {
-            let Content::Svg { source } = content else {
-                continue;
-            };
-            let reuse = previous
-                .filter(|(_, observations)| inputs.same_file(observations, &source))
-                .and_then(|(assets, _)| assets.rasters.get(&source));
-            let raster = match reuse {
-                Some(raster) => Arc::clone(raster),
-                None => Arc::new(paint_svg(&source)?),
-            };
-            assets.rasters.insert(source, raster);
+            match content {
+                Content::Svg { source } => {
+                    let raster = match unchanged(&source).and_then(|assets| assets.svg.get(&source))
+                    {
+                        Some(raster) => Arc::clone(raster),
+                        None => Arc::new(paint_svg(&source)?),
+                    };
+                    assets.svg.insert(source, raster);
+                }
+                Content::Image { source } => {
+                    use crate::render::image::{PreparedImage, prepare_image};
+                    let old = unchanged(&source);
+                    if let Some(image) = old.and_then(|old| old.pinned_images.get(&source)) {
+                        assets.pinned_images.insert(source, Arc::clone(image));
+                    } else if let Some(size) = old.and_then(|old| old.other_sizes.get(&source)) {
+                        assets.other_sizes.insert(source, *size);
+                    } else {
+                        match prepare_image(&source)? {
+                            PreparedImage::Pinned(raster) => {
+                                assets
+                                    .pinned_images
+                                    .insert(source, PinnedImage::new(raster));
+                            }
+                            PreparedImage::IntrinsicSize(size) => {
+                                assets.other_sizes.insert(source, size);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
         }
         Ok(assets)
     }
 
     #[cfg(feature = "host-audio")]
-    pub(crate) fn get(&self, path: &Path) -> Option<&Raster> {
-        self.rasters.get(path).map(Arc::as_ref)
+    pub(crate) fn svg(&self, path: &Path) -> Option<&Raster> {
+        self.svg.get(path).map(Arc::as_ref)
     }
-}
 
-/// Decoded dimensions of image sources observed by the accepted revision.
-/// Selection can resolve an image's rectangle without loading its pixels.
-#[cfg(feature = "host-audio")]
-#[derive(Default)]
-pub(crate) struct PreparedImageAssets {
-    sizes: HashMap<PathBuf, [u32; 2]>,
-}
+    #[cfg(feature = "host-audio")]
+    pub(crate) fn image_size(&self, path: &Path) -> Option<[u32; 2]> {
+        self.pinned_images
+            .get(path)
+            .map(|image| image.raster.size)
+            .or_else(|| self.other_sizes.get(path).copied())
+    }
 
-#[cfg(feature = "host-audio")]
-impl PreparedImageAssets {
-    pub(crate) fn prepare(
-        project: &crate::Project,
-        previous: Option<(&Self, &crate::project_watch::ProjectInputs)>,
-        inputs: &crate::project_watch::ProjectInputs,
-    ) -> Result<Self> {
-        let mut assets = Self::default();
+    /// Standalone renderers pin the image inputs they accept at open, even before the first draw.
+    pub(crate) fn prepare_pinned(project: &crate::Project) -> Result<Self> {
+        let mut assets = Self {
+            animations: PreparedAnimations::prepare(project, |_| None)?,
+            ..Self::default()
+        };
         for content in sources(project.graphic_scopes()).rasters {
-            let Content::Image { source } = content else {
-                continue;
-            };
-            let size = previous
-                .filter(|(_, observations)| inputs.same_file(observations, &source))
-                .and_then(|(assets, _)| assets.get(&source));
-            let size = match size {
-                Some(size) => size,
-                None => crate::render::image::dimensions(&source)?,
-            };
-            assets.sizes.insert(source, size);
+            if let Content::Image { source } = content
+                && let Some(raster) = crate::render::image::prepare_pinned(&source)?
+            {
+                assets
+                    .pinned_images
+                    .insert(source, PinnedImage::new(raster));
+            }
         }
         Ok(assets)
-    }
-
-    pub(crate) fn get(&self, path: &Path) -> Option<[u32; 2]> {
-        self.sizes.get(path).copied()
     }
 }
 
@@ -1127,16 +1180,41 @@ pub(crate) fn validate_document_artwork(project: &crate::Project) -> Result<()> 
 }
 
 impl PaintCache {
-    pub(crate) fn install_svg_assets(&mut self, assets: &PreparedSvgAssets) {
-        self.rasters
-            .extend(assets.rasters.iter().map(|(path, raster)| {
-                (
-                    Content::Svg {
-                        source: path.clone(),
-                    },
-                    Arc::clone(raster),
-                )
-            }));
+    pub(crate) fn install_raster_assets(&mut self, assets: &PreparedRasterAssets) {
+        self.animations = assets.animations.clone();
+        self.rasters.extend(assets.svg.iter().map(|(path, raster)| {
+            (
+                Content::Svg {
+                    source: path.clone(),
+                },
+                Arc::clone(raster),
+            )
+        }));
+        for (source, image) in &assets.pinned_images {
+            self.install_pinned_image(source.clone(), Arc::clone(image));
+        }
+    }
+
+    fn install_pinned_image(&mut self, source: PathBuf, image: Arc<PinnedImage>) {
+        self.rasters.insert(
+            Content::Image {
+                source: source.clone(),
+            },
+            Arc::clone(&image.raster),
+        );
+        self.pinned_images.insert(source, image);
+    }
+
+    pub(crate) fn clear_preview_caches(&mut self) {
+        let mut cold = Self {
+            meshes: std::mem::take(&mut self.meshes),
+            animations: std::mem::take(&mut self.animations),
+            ..Self::default()
+        };
+        for (source, image) in std::mem::take(&mut self.pinned_images) {
+            cold.install_pinned_image(source, image);
+        }
+        *self = cold;
     }
 
     /// Probe a transient prefix during workspace validation using the same face as playback.
@@ -1287,8 +1365,16 @@ impl PaintCache {
             }
         }
         for content in needed.rasters.difference(&accepted.rasters) {
-            // Accepted SVG artwork was seeded before validating the renderer.
-            if matches!(content, Content::Svg { .. }) && self.rasters.contains_key(content) {
+            // File-backed raster artwork can already be pinned by the accepted snapshot.
+            if matches!(content, Content::Svg { .. } | Content::Image { .. })
+                && self.rasters.contains_key(content)
+            {
+                continue;
+            }
+            if let Content::Image { source } = content
+                && let Some(raster) = crate::render::image::prepare_pinned(source)?
+            {
+                staged.install_pinned_image(source.clone(), PinnedImage::new(raster));
                 continue;
             }
             if self.text.contains_key(content)
@@ -1315,6 +1401,7 @@ impl PaintCache {
     pub(crate) fn install_rasters(&mut self, staged: Self) {
         self.meshes.extend(staged.meshes);
         self.rasters.extend(staged.rasters);
+        self.pinned_images.extend(staged.pinned_images);
         self.text.extend(staged.text);
         self.layouts.extend(staged.layouts);
         self.faces.extend(staged.faces);
@@ -1336,6 +1423,11 @@ impl PaintCache {
             .retain(|d, _| needed.measured_paths.contains(d));
         self.rasters
             .retain(|source, _| needed.rasters.contains(source));
+        self.pinned_images.retain(|path, _| {
+            needed.rasters.contains(&Content::Image {
+                source: path.clone(),
+            })
+        });
         self.textures
             .retain(|source, _| needed.rasters.contains(source));
         self.text.retain(|source, _| {

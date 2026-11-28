@@ -10,3 +10,12 @@ fn n4_linear_premul(color: vec4<f32>) -> vec4<f32> {
     let linear = n4_decode_srgb(encoded);
     return vec4(linear * color.a, color.a);
 }
+
+// Match the Rust TexelColor discriminants. Associate each tap before interpolation.
+fn n4_source_color(color: vec4<f32>, encoding: u32) -> vec4<f32> {
+    switch encoding {
+        case 1u: { return n4_linear_premul(color); }
+        case 2u: { return vec4(color.rgb * color.a, color.a); }
+        default: { return color; }
+    }
+}

@@ -251,3 +251,63 @@ fn tilted_mesh_passes_through_editable_type_and_stays_resident_when_seeking() ->
     assert!(inactive.chunks_exact(4).all(|p| p[..3] == [0, 0, 0]));
     Ok(())
 }
+
+#[test]
+fn an_image_material_keys_the_picture_accepted_before_the_source_changed() -> Result<()> {
+    use crate::{Project, graphics::PreparedRasterAssets};
+
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");
+    for (original, replacement, kind) in [
+        ("webp/decal.webp", "webp/linear-rgb.webp", "image"),
+        ("webp/patches.webp", "webp/animated.webp", "video"),
+        ("gif/restore.gif", "webp/patches.webp", "video"),
+    ] {
+        let temp = tempfile::tempdir()?;
+        let source = temp.path().join("screen.bin");
+        std::fs::copy(fixtures.join(original), &source)?;
+        let content = if kind == "image" {
+            json!({"type":"image","source":source})
+        } else {
+            json!({"type":"video","source":source,"start":0,"source_in":0,"duration":1,"size":[4,2]})
+        };
+        let layer = json!({"content":content});
+        let project: Project = serde_json::from_value(json!({
+            "size":[32,24], "fps":[24,1],
+            "shots":[{"duration":1,"background":{"color":[0,0,0]},"graphics":[layer]}]
+        }))?;
+        let key = |cache: &mut PaintCache| -> Result<serde_json::Value> {
+            let mut value = layer.clone();
+            super::identify_files(
+                &mut value,
+                &mut cache.file_digests,
+                &cache.pinned_images,
+                &cache.animations,
+                &mut false,
+            )?;
+            Ok(value)
+        };
+        let mut accepted = PaintCache::default();
+        accepted.install_raster_assets(&PreparedRasterAssets::prepare_pinned(&project)?);
+        // Even the first Final-key request can happen after the original file is gone.
+        std::fs::remove_file(&source)?;
+        let before = key(&mut accepted)?;
+        let expected_prefix = if kind == "image" {
+            "raster:"
+        } else {
+            "animation:"
+        };
+        assert!(
+            before["content"]["source"]
+                .as_str()
+                .unwrap()
+                .starts_with(expected_prefix)
+        );
+        std::fs::copy(fixtures.join(replacement), &source)?;
+        accepted.clear_preview_caches();
+        assert_eq!(key(&mut accepted)?, before);
+        let mut next = PaintCache::default();
+        next.install_raster_assets(&PreparedRasterAssets::prepare_pinned(&project)?);
+        assert_ne!(key(&mut next)?, before);
+    }
+    Ok(())
+}

@@ -1,6 +1,6 @@
 //! Keep a pending Gaussian resolve and its following point grades in the
 //! final draw. A later Gaussian needs a real texture of the preceding result.
-use super::{Draw, IDENTITY_EFFECT, ScenePainter, ShaderKind};
+use super::{Draw, IDENTITY_EFFECT, ScenePainter, ShaderKind, TexelColor};
 use crate::graphics::{Blend, Content, Graphic, SampledGrade, SampledSourceBlur, SourceEffect};
 use anyhow::Result;
 
@@ -12,16 +12,16 @@ pub(super) struct SourceFeatures {
 
 pub(super) struct PreparedSource {
     pub source: wgpu::Texture,
-    pub encoded: bool,
+    pub color: TexelColor,
     blur: Option<(wgpu::Texture, SampledSourceBlur)>,
     pub grades: Vec<SampledGrade>,
 }
 
 impl PreparedSource {
-    pub fn new(source: wgpu::Texture, encoded: bool) -> Self {
+    pub fn new(source: wgpu::Texture, color: TexelColor) -> Self {
         Self {
             source,
-            encoded,
+            color,
             blur: None,
             grades: Vec::new(),
         }
@@ -114,7 +114,7 @@ impl ScenePainter<'_> {
                         ))
                     .then(|| self.source_key(&prepared.source, content));
                     let blurred =
-                        self.blur_source(&prepared.source, key, prepared.encoded, sample.sigma)?;
+                        self.blur_source(&prepared.source, key, prepared.color, sample.sigma)?;
                     prepared.blur = Some((blurred, sample));
                 }
             }
@@ -154,7 +154,7 @@ impl ScenePainter<'_> {
                 wipe_right: None,
                 opacity: 1.,
                 amount: 0.,
-                encoded: prepared.encoded,
+                color: prepared.color,
                 blur: prepared.blur_input(),
                 grades: &prepared.grades,
                 object_mattes: None,
@@ -164,7 +164,7 @@ impl ScenePainter<'_> {
         )?;
         self.stats.source_effect_intermediate_passes += 1;
         prepared.source = stage.clone();
-        prepared.encoded = false;
+        prepared.color = TexelColor::LinearPremultiplied;
         prepared.blur = None;
         prepared.grades.clear();
         Ok(())

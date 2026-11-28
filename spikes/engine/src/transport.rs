@@ -2,7 +2,7 @@
 use crate::export::{ExportReport, write_mp4_with_progress};
 use crate::{
     Engine, Frame, Project, RevisionChange,
-    graphics::{PreparedSvgAssets, PreparedTextLayouts},
+    graphics::{PreparedRasterAssets, PreparedTextLayouts},
 };
 mod frame_cache;
 use anyhow::{Context, Result, ensure};
@@ -279,7 +279,7 @@ impl Transport {
     pub(crate) fn open_with_artwork(
         project: Project,
         revision: u64,
-        svg_assets: Option<Arc<PreparedSvgAssets>>,
+        raster_assets: Option<Arc<PreparedRasterAssets>>,
         text_layouts: Option<Arc<PreparedTextLayouts>>,
     ) -> Result<Self> {
         let duration = project.duration()?;
@@ -301,7 +301,7 @@ impl Transport {
             .spawn(move || {
                 let mut engine = match Engine::new_with_artwork(
                     project,
-                    svg_assets.as_deref(),
+                    raster_assets.as_deref(),
                     text_layouts.as_deref(),
                 )
                 .and_then(|mut engine| {

@@ -9,14 +9,14 @@ The alpha development target is Apple Silicon macOS with Metal. Install Xcode Co
 From the repository root:
 
 ```sh
-brew install ffmpeg sdl2 just
+brew install ffmpeg sdl2 webp just
 just host-native
 spikes/engine/target/debug/n4 validate spikes/examples/signal-atlas
 spikes/engine/target/debug/n4 render spikes/examples/signal-atlas --frames 42,84 --out /tmp/n4-atlas-frames
 spikes/engine/target/debug/n4 export spikes/examples/signal-atlas --out /tmp/n4-atlas.mp4
 ```
 
-Use a fresh destination for export. FFmpeg/ffprobe must be on `PATH`. The native decoder links the Homebrew FFmpeg libraries. If using another install, set `FFMPEG_DIR` to its prefix containing `include` and `lib`. SDL2 supplies the native audio and window. The CLI alone also builds with `cd spikes && cargo build --locked -p n4-engine --bin n4`. Building and validating 2D projects works without an OpenUSD SDK. Field Unit exercises the optional spatial reader. [OpenUSD setup](../spatial/openusd/PROFILE.md#local-sdk-and-tests)
+Use a fresh destination for export. FFmpeg/ffprobe must be on `PATH`. The native decoder links the Homebrew FFmpeg libraries. If using another install, set `FFMPEG_DIR` to its prefix containing `include` and `lib`. Animated WebP links libwebpdemux from Homebrew or the `WEBP_DIR` prefix. GIF decoding uses a Rust crate. SDL2 supplies the native audio and window. The CLI alone also builds with `cd spikes && cargo build --locked -p n4-engine --bin n4`. Building and validating 2D projects works without an OpenUSD SDK. Field Unit exercises the optional spatial reader. [OpenUSD setup](../spatial/openusd/PROFILE.md#local-sdk-and-tests)
 
 ## Preview and edit
 
@@ -33,7 +33,7 @@ In the SDL window, drag the ruler to seek, press Space to play or pause, and use
 | Component | Responsibility |
 |---|---|
 | `project`, `plan` | Resolve the base V1 shot, then each active V2 graphics placement in paint order. Each placement has its own clock from the first frame of its half-open interval and can cross a V1 cut. In a nested sequence, the inner V2 paints before its parent's V2. Project-wide graphics paint last on the project clock. |
-| `media` | Index displayed timestamps and resolve the source picture. FFmpeg decodes in presentation order, seeking on discontinuities. One reader bounds its recently decoded pictures across sources. Draft preview and filmstrips can use an explicit proxy after exact onset and terminal-hold validation. Export opens the originals. |
+| `media` | Index displayed timestamps and resolve the source picture. GIF and WebP adapters reconstruct transparent animation canvases on a shared source clock. FFmpeg decodes movies in presentation order and seeks on discontinuities. One reader bounds its recently decoded pictures across sources. Draft preview and filmstrips can use an explicit proxy after exact onset and terminal-hold validation. Export opens the originals. |
 | `graphics`, `render` | Shape wrapped text, paint native paths and import the supported SVG subset with Skia. The wgpu compositor runs creator WGSL and applies geometric or SVG alpha masks to a layer or an isolated group. The current interop path reads the finished RGBA frame back to CPU memory. |
 | `export` | Mix clips on a 48 kHz stereo sample clock and stream native frames to FFmpeg. Inspection and export call the same render path. |
 | `preview` | Scrubbing and filmstrips each retain the latest request. A media shot under an active V2 placement supplies a composed thumbnail. Media shots with no shot graphics or active placement use source thumbnails. Native backgrounds also use the composed picture. Continuous playback has a separate bounded, sequential frame queue. |

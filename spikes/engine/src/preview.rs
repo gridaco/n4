@@ -1,7 +1,7 @@
 //! Latest-request preview. At most one frame renders, one request waits and one result is retained.
 use crate::{
     Engine, Frame, Project,
-    graphics::{PreparedSvgAssets, PreparedTextLayouts},
+    graphics::{PreparedRasterAssets, PreparedTextLayouts},
 };
 use anyhow::{Context, Result, anyhow, ensure};
 use std::sync::{Arc, Condvar, Mutex, mpsc};
@@ -46,11 +46,7 @@ impl Preview {
                 if cold {
                     engine.reader = Default::default();
                     engine.paragraph = None;
-                    // Drop mutable painting and device caches. The pinned scene must
-                    // still draw if its original USD file has since been moved.
-                    let meshes = std::mem::take(&mut engine.graphics.meshes);
-                    engine.graphics = Default::default();
-                    engine.graphics.meshes = meshes;
+                    engine.graphics.clear_preview_caches();
                 }
                 let mut result = engine.render(frame)?;
                 result.trace.proxy = result
@@ -97,14 +93,15 @@ impl Filmstrip {
         width: u32,
         proxies: crate::proxy::ProxyMap,
     ) -> Result<Self> {
-        Self::open_with_artwork(project, width, proxies, None, None)
+        let assets = Arc::new(PreparedRasterAssets::prepare_pinned(&project)?);
+        Self::open_with_artwork(project, width, proxies, assets, None)
     }
 
     pub(crate) fn open_with_artwork(
         project: Project,
         width: u32,
         proxies: crate::proxy::ProxyMap,
-        svg_assets: Option<Arc<PreparedSvgAssets>>,
+        raster_assets: Arc<PreparedRasterAssets>,
         text_layouts: Option<Arc<PreparedTextLayouts>>,
     ) -> Result<Self> {
         project.validate()?;
@@ -123,7 +120,10 @@ impl Filmstrip {
             // Media source indices can decode directly to the strip size. Authored path
             // coordinates, filter radii and text layout require the original canvas.
             project.size = size;
-            let mut sources = crate::prepare_sources(&project, &Default::default(), false)?;
+            let mut sources =
+                raster_assets
+                    .animations
+                    .profiles(&project, &Default::default(), false)?;
             project.size = [w, h];
             // The strip follows the primary cut, including when the caller also
             // supplied a valid preview proxy for an inset-only source.
@@ -151,7 +151,7 @@ impl Filmstrip {
                     if compositor.is_none() {
                         let mut engine = Engine::new_with_artwork(
                             project.clone(),
-                            svg_assets.as_deref(),
+                            Some(&raster_assets),
                             text_layouts.as_deref(),
                         )?;
                         crate::proxy::install(&mut engine.sources, &proxies, project.fps)?;
@@ -171,10 +171,10 @@ impl Filmstrip {
                     .get(&(path.clone(), size))
                     .context("missing thumbnail source")?;
                 let ordinal = source.resolve(shot.source_in + local)?;
-                let (rgba, _) = reader.read(source, ordinal)?;
+                let (decoded, _) = reader.read(source, ordinal)?;
                 Ok(Thumbnail {
                     size,
-                    rgba,
+                    rgba: decoded.rgba,
                     proxy: proxies.get(path).cloned(),
                     source: Some(path.clone()),
                     source_frame: ordinal,

@@ -28,6 +28,15 @@ Record the project revision, build profile, OS, hardware, render size, display r
 
 For interframe footage, changing one frame in reverse can require decoding from an earlier random-access point. A stream with reordered packets can have a key packet’s decode time before the requested picture’s presentation time. Use the indexed group of pictures and validate the exact requested timestamp at original and proxy sizes. Compare an all-intra copy of the same pictures when isolating decode cost. [Decoder](../spikes/engine/src/media/native.rs) · [Timing regression](../spikes/engine/tests/proxy.rs)
 
+Animated GIF and WebP replay earlier patches and disposal operations on a cold reverse seek. The optional `measure_animation_reverse_reads` test takes a file via `N4_ANIMATION_SAMPLE`. It requests each displayed source frame once in descending order, starting with an empty cache. It measures CPU decoding and retained canvas and output bytes. Encoded source bytes, transient allocations, composition and screen presentation fall outside this measurement. [Media measurement](../spikes/engine/src/media/tests.rs)
+
+| Source on Apple M4 Pro, 640×360, debug build | Validation and open | Reverse seek p95 | Frames decoded | Peak cache and cursor charge |
+| --- | ---: | ---: | ---: | ---: |
+| WebP, 72 images | 11.31 ms | 8.50 ms | 2,628 | 58.01 MiB |
+| GIF, 48 images with partial restore-previous patches | 36.39 ms | 23.31 ms | 1,176 | 43.41 MiB |
+
+The GIF trial decoded 48 + 47 + … + 1 images. A warm interactive drag can revisit a cached canvas and avoid that work. If distant reverse seeks miss the target frame budget, measure whether caching periodic reconstruction states pays for the extra memory. A saved state must include pending disposal and the prior pixels needed for restore-previous.
+
 For multiple video layers, record the active sources, decode sizes and trims. Track decoder opens and the combined memory across cursors. Compare repeated visits to a trim, simultaneous uses of the same source at different times, and a cut to zero active video.
 
 A 1920 × 1080 RGBA8 picture occupies 8,294,400 bytes per full-frame copy. Time decode, conversion, upload, compositing, readback and presenter submission separately before changing the transport. Compare hosts in foreground windows at the same scale. Include thumbnail activity and the number of outstanding frame leases. [Host contract](../spikes/host/README.md)

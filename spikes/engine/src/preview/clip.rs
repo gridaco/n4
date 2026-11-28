@@ -25,7 +25,7 @@ impl ClipThumbnails {
     pub(crate) fn for_project(
         project: Project,
         placements: &[Placement],
-        svg_assets: Option<Arc<crate::graphics::PreparedSvgAssets>>,
+        raster_assets: Arc<crate::graphics::PreparedRasterAssets>,
         text_layouts: Option<Arc<crate::graphics::PreparedTextLayouts>>,
     ) -> Result<Self> {
         let [width, height] = project.size;
@@ -50,14 +50,20 @@ impl ClipThumbnails {
                         .next()
                         .is_none()
                 {
-                    return media.read(source, size, project.fps, shot.source_in + local);
+                    return media.read(
+                        &raster_assets.animations,
+                        source,
+                        size,
+                        project.fps,
+                        shot.source_in + local,
+                    );
                 }
                 let engine = match &mut compositor {
                     Some(engine) => engine,
                     None => {
                         let mut engine = Engine::new_with_artwork(
                             project.clone(),
-                            svg_assets.as_deref(),
+                            Some(&raster_assets),
                             text_layouts.as_deref(),
                         )?;
                         engine.prepare_session_artwork()?;
@@ -212,6 +218,7 @@ impl Default for MediaThumbnails {
 impl MediaThumbnails {
     fn read(
         &mut self,
+        animations: &media::assets::PreparedAnimations,
         path: &Path,
         [width, height]: [u32; 2],
         fps: crate::FrameRate,
@@ -221,7 +228,7 @@ impl MediaThumbnails {
             if let Some(index) = self.profiles.iter().position(|(source, _)| source == path) {
                 self.profiles.remove(index).expect("known profile")
             } else {
-                let index = media::IndexedVideo::open(path, width, height, fps)?;
+                let index = animations.profile(path, [width, height], fps)?;
                 if self.profiles.len() == MEDIA_PROFILES {
                     self.profiles.pop_front();
                     self.reader.retain_sources(|key| {
@@ -236,10 +243,10 @@ impl MediaThumbnails {
         let (_, index) = self.profiles.back().expect("installed profile");
         self.reader.begin_frame([index]);
         let ordinal = index.resolve(tick)?;
-        let (rgba, _) = self.reader.read(index, ordinal)?;
+        let (decoded, _) = self.reader.read(index, ordinal)?;
         Ok(Thumbnail {
             size: [width, height],
-            rgba,
+            rgba: decoded.rgba,
             source: Some(path.to_owned()),
             source_frame: ordinal,
             proxy: None,
@@ -310,8 +317,12 @@ mod tests {
         let document = crate::AuthoringDocument::load(path, None)?;
         let inspection = document.inspection()?;
         assert!(!inspection.placement("V2:outer@2").unwrap().enabled);
-        let worker =
-            ClipThumbnails::for_project(document.project, &inspection.placements, None, None)?;
+        let worker = ClipThumbnails::for_project(
+            document.project,
+            &inspection.placements,
+            Arc::default(),
+            None,
+        )?;
         let sample = |path: &str| -> Result<Thumbnail> {
             let occurrence = inspection.placement(path).context("missing test clip")?;
             ensure!(

@@ -20,6 +20,29 @@ fn write_test_project(directory: &Path) -> Result<std::path::PathBuf> {
 }
 
 #[test]
+fn graphic_edits_reuse_the_accepted_movie_profile_until_asset_refresh() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let path = write_test_project(tmp.path())?;
+    let mut doc: Value = serde_json::from_slice(&fs::read(&path)?)?;
+    doc["graphics"] = json!([{"position":[1,0],"content":{
+        "type":"rect","width":16,"height":16,"fill":[255,0,0,255]
+    }}]);
+    fs::write(&path, serde_json::to_vec(&doc)?)?;
+    let mut session = Session::open(&path)?;
+    let original = session.render(0)?.rgba;
+
+    fs::remove_file(tmp.path().join("numbered.mkv"))?;
+    session.set(0, "/graphics/0/position/0", json!(32))?;
+    let moved = session.render(0)?;
+    assert!(moved.trace.reused_decode);
+    assert_ne!(moved.rgba, original);
+    assert!(session.refresh_assets(1).is_err());
+    session.undo(1)?;
+    assert_eq!(session.render(0)?.rgba, original);
+    Ok(())
+}
+
+#[test]
 fn curve_handle_edits_preserve_endpoints_and_evaluate_between_local_keys() -> Result<()> {
     let directory = tempfile::tempdir()?;
     let path = write_test_project(directory.path())?;

@@ -196,7 +196,11 @@ impl AuthoringDocument {
 
     /// CPU preflight of dependencies for an authored edit. Shader compilation uses the render device.
     pub fn validate_assets(&self) -> Result<()> {
-        crate::prepare_sources(&self.project, &Default::default(), true)?;
+        crate::media::assets::PreparedAnimations::prepare(&self.project, |_| None)?.profiles(
+            &self.project,
+            &Default::default(),
+            true,
+        )?;
         crate::export::AudioSourceLengths::default().validate(&self.project.audio)?;
         crate::session::preflight_title(&self.project, None)?;
         crate::graphics::validate_document_artwork(&self.project)

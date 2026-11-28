@@ -1,5 +1,6 @@
 //! One in-process FFmpeg session per active decode cursor.
-use super::*;
+use super::{PresentationIndex, movie::Movie};
+use anyhow::{Context, Result, bail};
 use std::ffi::{CString, c_char, c_int, c_void};
 use std::ptr::NonNull;
 
@@ -20,8 +21,7 @@ unsafe extern "C" {
     fn av_strerror(error: c_int, buffer: *mut c_char, size: usize) -> c_int;
 }
 
-pub(super) struct DecodeCursor {
-    pub(super) key: Arc<PathBuf>,
+pub(super) struct MovieCursor {
     decoder: NonNull<c_void>,
     filters: CString,
     next: u32,
@@ -29,21 +29,18 @@ pub(super) struct DecodeCursor {
 
 // FFmpeg sessions can move between threads. Calls and destruction require
 // exclusive ownership; the session never keeps a pointer to Rust frame bytes.
-unsafe impl Send for DecodeCursor {}
+unsafe impl Send for MovieCursor {}
 
-impl DecodeCursor {
-    pub(super) fn is_near(&self, source: &IndexedVideo, ordinal: u32) -> bool {
-        if !Arc::ptr_eq(&self.key, &source.key) {
-            return false;
-        }
-        let keys = &source.index.keyframes;
+impl MovieCursor {
+    pub(super) fn is_near(&self, source: &Movie, ordinal: u32) -> bool {
+        let keys = &source.keyframes;
         let current_gop = keys.partition_point(|&k| k < self.next);
         let target_gop = keys.partition_point(|&k| k <= ordinal);
         current_gop.abs_diff(target_gop) <= 1
     }
 }
 
-impl Drop for DecodeCursor {
+impl Drop for MovieCursor {
     fn drop(&mut self) {
         unsafe { n4_decoder_close(self.decoder.as_ptr()) };
     }
@@ -59,27 +56,23 @@ fn av_result(result: c_int) -> Result<()> {
     Ok(())
 }
 
-impl IndexedVideo {
+impl Movie {
     pub(super) fn decode(
         &self,
+        index: &PresentationIndex,
+        rgba_len: usize,
         ordinal: u32,
         preroll_capacity: usize,
-        active: &mut Option<DecodeCursor>,
+        active: &mut Option<MovieCursor>,
     ) -> Result<Vec<u8>> {
-        let pts = *self
-            .index
+        let pts = *index
             .pts
             .get(ordinal as usize)
             .context("source ordinal out of bounds")?;
-        let bytes: c_int = self
-            .rgba_len
+        let bytes: c_int = rgba_len
             .try_into()
             .context("FFmpeg output exceeds frame size limit")?;
-        if active
-            .as_ref()
-            .is_none_or(|c| !Arc::ptr_eq(&c.key, &self.key))
-        {
-            *active = None;
+        if active.is_none() {
             let path = CString::new(self.path.as_os_str().as_encoded_bytes())?;
             let filters = CString::new(self.filter.as_str())?;
             let mut raw = std::ptr::null_mut();
@@ -87,8 +80,7 @@ impl IndexedVideo {
                 n4_decoder_open(path.as_ptr(), self.decode_threads.into(), &mut raw)
             })
             .with_context(|| format!("open video decoder for {}", self.path.display()))?;
-            *active = Some(DecodeCursor {
-                key: Arc::clone(&self.key),
+            *active = Some(MovieCursor {
                 decoder: NonNull::new(raw).context("FFmpeg returned an empty decoder")?,
                 filters,
                 next: 0,
@@ -97,7 +89,7 @@ impl IndexedVideo {
         let cursor = active.as_mut().context("missing video decoder")?;
         // Forward within the same GOP: consume intervening pictures in the codec.
         // Jump past a random-access point or reverse: demux seek and flush refs.
-        let keys = &self.index.keyframes;
+        let keys = &self.keyframes;
         let start = keys[..keys.partition_point(|&k| k <= ordinal)]
             .last()
             .copied()
@@ -105,11 +97,11 @@ impl IndexedVideo {
         // With reordered packets, seeking backward from the target PTS can land at
         // the *next* GOP's decode timestamp. Start from this picture's own GOP.
         let seek_pts = if ordinal < cursor.next || start > cursor.next {
-            self.index.pts[start as usize]
+            index.pts[start as usize]
         } else {
             i64::MIN // AV_NOPTS_VALUE: retain the sequential cursor
         };
-        let mut rgba = vec![0; self.rgba_len];
+        let mut rgba = vec![0; rgba_len];
         let result = unsafe {
             n4_decoder_read(
                 cursor.decoder.as_ptr(),
@@ -140,6 +132,26 @@ impl IndexedVideo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        FrameRate,
+        media::{IndexedVideo, MAX_DECODE_CURSORS, VideoReader},
+    };
+    use anyhow::ensure;
+    use std::{path::Path, process::Command};
+
+    fn movie(source: &IndexedVideo) -> &Movie {
+        let super::super::Backend::Movie(movie) = &source.backend else {
+            panic!("expected movie")
+        };
+        movie
+    }
+
+    fn movie_cursor(cursor: &super::super::ReaderCursor) -> &MovieCursor {
+        let super::super::Cursor::Movie(movie) = &cursor.decoder else {
+            panic!("expected movie cursor")
+        };
+        movie
+    }
 
     #[test]
     fn preroll_hits_keep_the_forward_cursor_and_evict_within_budget() -> Result<()> {
@@ -147,20 +159,20 @@ mod tests {
         let video = IndexedVideo::open(&path, 320, 180, FrameRate(30, 1))?;
         let mut cursor = None;
         let budget = 2 * 1024 * 1024;
-        video.decode(20, budget, &mut cursor)?;
-        let next = |c: &Option<DecodeCursor>| c.as_ref().unwrap().next;
+        movie(&video).decode(&video.index, video.rgba_len, 20, budget, &mut cursor)?;
+        let next = |c: &Option<MovieCursor>| c.as_ref().unwrap().next;
         assert_eq!(next(&cursor), 21);
-        video.decode(18, budget, &mut cursor)?;
+        movie(&video).decode(&video.index, video.rgba_len, 18, budget, &mut cursor)?;
         assert_eq!(
             next(&cursor),
             21,
             "hit the saved preroll without repositioning"
         );
-        video.decode(21, budget, &mut cursor)?;
+        movie(&video).decode(&video.index, video.rgba_len, 21, budget, &mut cursor)?;
         assert_eq!(next(&cursor), 22);
-        video.decode(1, budget, &mut cursor)?;
+        movie(&video).decode(&video.index, video.rgba_len, 1, budget, &mut cursor)?;
         assert_eq!(next(&cursor), 2, "old preroll must have been evicted");
-        video.decode(20, 1024, &mut cursor)?;
+        movie(&video).decode(&video.index, video.rgba_len, 20, 1024, &mut cursor)?;
         assert_eq!(
             unsafe { n4_decoder_retained(cursor.as_ref().unwrap().decoder.as_ptr()) },
             0,
@@ -192,11 +204,13 @@ mod tests {
             for (source, ordinal, width) in [(&primary, a, 320), (&inset, b, 160)] {
                 let (pixels, hit) = reader.read(source, ordinal)?;
                 assert!(!hit);
-                assert_eq!(barcode(&pixels, width), ordinal);
+                assert_eq!(barcode(&pixels.rgba, width), ordinal);
                 let retained: usize = reader
                     .cursors
                     .iter()
-                    .map(|cursor| unsafe { n4_decoder_retained(cursor.decoder.decoder.as_ptr()) })
+                    .map(|cursor| unsafe {
+                        n4_decoder_retained(movie_cursor(cursor).decoder.as_ptr())
+                    })
                     .sum();
                 peak_preroll = peak_preroll.max(retained);
                 assert!(retained <= reader.preroll_limit);
@@ -204,22 +218,17 @@ mod tests {
             }
             assert_eq!(reader.cursors.len(), 2);
             for source in [&primary, &inset] {
-                assert!(
-                    reader
-                        .cursors
-                        .iter()
-                        .any(|c| source.has_identity(&c.decoder.key))
-                );
+                assert!(reader.cursors.iter().any(|c| source.has_identity(&c.key)));
             }
         }
         assert!(peak_preroll > 0);
 
         reader.begin_frame([&primary]);
         assert_eq!(reader.cursors.len(), 1);
-        assert!(primary.has_identity(&reader.cursors[0].decoder.key));
+        assert!(primary.has_identity(&reader.cursors[0].key));
         let (picture, hit) = reader.read(&primary, 18)?;
         assert!(hit);
-        assert_eq!(barcode(&picture, 320), 18);
+        assert_eq!(barcode(&picture.rgba, 320), 18);
         Ok(())
     }
 
@@ -240,8 +249,8 @@ mod tests {
         let session = |r: &VideoReader, p: &IndexedVideo| {
             r.cursors
                 .iter()
-                .find(|c| p.has_identity(&c.decoder.key))
-                .map(|c| c.decoder.decoder)
+                .find(|c| p.has_identity(&c.key))
+                .map(|c| movie_cursor(c).decoder)
         };
         // Multiple layers reading one profile should consume one slot.
         reader.begin_frame(profiles[..4].iter().chain(&profiles[..4]));
@@ -261,7 +270,7 @@ mod tests {
                 let preroll: usize = reader
                     .cursors
                     .iter()
-                    .map(|c| unsafe { n4_decoder_retained(c.decoder.decoder.as_ptr()) })
+                    .map(|c| unsafe { n4_decoder_retained(movie_cursor(c).decoder.as_ptr()) })
                     .sum();
                 assert!(preroll <= reader.preroll_limit && reader.bytes + preroll <= reader.limit);
             }
@@ -289,7 +298,7 @@ mod tests {
             .map(|n| format!("eq(n,{n})"))
             .collect::<Vec<_>>()
             .join("+");
-        let filter = format!("select='{select}',{}", video.filter);
+        let filter = format!("select='{select}',{}", movie(&video).filter);
         let oracle = Command::new("ffmpeg")
             .args([
                 "-nostdin",
@@ -328,7 +337,7 @@ mod tests {
             let (pixels, _) = reader.read(&video, targets[i])?;
             let start = i * video.rgba_len;
             ensure!(
-                pixels.as_slice() == &oracle.stdout[start..start + video.rgba_len],
+                pixels.rgba.as_slice() == &oracle.stdout[start..start + video.rgba_len],
                 "full-resolution RGBA mismatch at source ordinal {}",
                 targets[i]
             );
@@ -355,7 +364,7 @@ mod tests {
                     "-map",
                     "0:v:0",
                     "-vf",
-                    &video.filter,
+                    &movie(&video).filter,
                     "-fps_mode",
                     "passthrough",
                     "-pix_fmt",
@@ -391,14 +400,14 @@ mod tests {
             .chain(random_targets)
             {
                 let (pixels, _) = reader.read(&video, i)?;
-                let cursor = &reader.cursors.back().unwrap().decoder;
+                let cursor = movie_cursor(reader.cursors.back().unwrap());
                 assert!(
                     unsafe { n4_decoder_retained(cursor.decoder.as_ptr()) } + reader.bytes
                         <= reader.limit
                 );
                 let start = i as usize * video.rgba_len;
                 assert!(
-                    pixels.as_slice() == &oracle.stdout[start..start + video.rgba_len],
+                    pixels.rgba.as_slice() == &oracle.stdout[start..start + video.rgba_len],
                     "{name} display ordinal {i} differs from the CLI's sequential decode"
                 );
             }

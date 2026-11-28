@@ -1,7 +1,7 @@
 //! Convolve an isolated drawable on its native pixel grid. Resolve the result
 //! against the sharp source at paint time so camera and band edits need no blur.
 use super::{
-    Gpu, ScenePainter, ShaderKind, raster_bounds,
+    Gpu, ScenePainter, ShaderKind, TexelColor, raster_bounds,
     sampled::{
         MAX_SCRATCH_BYTES, Pass, Region, gaussian_weights, linear_surface, sampling_uniform,
     },
@@ -177,10 +177,11 @@ impl Gpu {
 impl ScenePainter<'_> {
     pub(super) fn source_key(&self, source: &wgpu::Texture, content: &Content) -> SourceKey {
         let picture = match content {
-            Content::Footage { history: None } => self.video_pixels,
+            Content::Footage { history: None } => self.video_frame.map(|frame| &frame.rgba),
             Content::Video(clip) => clip.source_frame(self.time.frame).and_then(|tick| {
-                self.video_layer_pixels
+                self.video_layers
                     .get(&(clip.source.as_path(), clip.size, tick))
+                    .map(|uploaded| &uploaded.frame.rgba)
             }),
             _ => None,
         };
@@ -196,7 +197,7 @@ impl ScenePainter<'_> {
         &mut self,
         source: &wgpu::Texture,
         key: Option<SourceKey>,
-        encoded: bool,
+        color: TexelColor,
         sigma: f32,
     ) -> Result<wgpu::Texture> {
         let mut cache = self.gpu.source_blurs.borrow_mut();
@@ -248,21 +249,22 @@ impl ScenePainter<'_> {
         let gaussian = self.gpu.effect(ShaderKind::Sampled, GAUSSIAN)?;
         let radius = (3. * sigma).ceil() as u32;
         let weights = gaussian_weights(sigma, radius);
-        if encoded {
+        let convert_source = color != TexelColor::LinearPremultiplied;
+        if convert_source {
             let convert = self.gpu.effect(ShaderKind::LinearSource, "")?;
             self.filter_pass(Pass {
-                label: "unassociate and linearize source paint",
+                label: "prepare linear premultiplied source for blur",
                 inputs: &[source],
                 output: &blurred,
                 viewport: region,
                 pipeline: &convert,
-                uniform: &[0; 8],
+                uniform: &(color as u32).to_le_bytes(),
                 preserve: false,
             });
         }
         self.filter_pass(Pass {
             label: "source blur along X",
-            inputs: &[if encoded { &blurred } else { source }],
+            inputs: &[if convert_source { &blurred } else { source }],
             output: rows,
             viewport: region,
             pipeline: &gaussian,

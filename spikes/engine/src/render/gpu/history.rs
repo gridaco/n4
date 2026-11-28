@@ -187,6 +187,7 @@ impl ScenePainter<'_> {
 mod tests {
     use super::*;
     use crate::graphics::{Graphic, PaintCache};
+    use crate::media::{DecodedFrame, FrameAlpha};
     use crate::render::gpu::{FrameInputs, PrimaryPicture};
     use std::{collections::HashMap, fs};
 
@@ -227,11 +228,17 @@ mod tests {
             make_frame(180),
             make_frame(240),
         );
-        let render = |current, previous: [Option<Arc<Vec<u8>>>; 3], cache: &mut PaintCache| {
+        let render = |current: &Arc<Vec<u8>>,
+                      previous: [Option<Arc<Vec<u8>>>; 3],
+                      cache: &mut PaintCache| {
+            let decoded = DecodedFrame {
+                rgba: current.clone(),
+                alpha: FrameAlpha::Straight,
+            };
             gpu.compose_view(
                 FrameInputs {
                     size,
-                    primary: PrimaryPicture::DecodedHistory(current, &previous),
+                    primary: PrimaryPicture::DecodedHistory(&decoded, &previous),
                     video_layers: &HashMap::new(),
                     overlay: None,
                     scopes: vec![(std::slice::from_ref(&layer), 10)],
@@ -260,6 +267,20 @@ mod tests {
         let held = render(&c, [Some(c.clone()), Some(b.clone()), None], &mut cache)?;
         assert_eq!(red(&held.0), [180, 180, 120, 0, 0]);
         assert_eq!(held.1.history_uploads, 0);
+
+        // Full coverage, half coverage and no coverage take the same source
+        // route for age zero and for a prior frame on a cold seek.
+        let half = Arc::new([255, 0, 0, 128].repeat(5));
+        let clear = Arc::new([255, 0, 0, 0].repeat(5));
+        let mixed = render(
+            &half,
+            [Some(clear.clone()), Some(half.clone()), None],
+            &mut cache,
+        )?;
+        for (channel, expected) in red(&mixed.0).iter().zip([188u8, 0, 188, 0, 0]) {
+            assert!(channel.abs_diff(expected) <= 1);
+        }
+        assert!(mixed.0.chunks_exact(4).all(|p| p[3] == 255));
         Ok(())
     }
 }

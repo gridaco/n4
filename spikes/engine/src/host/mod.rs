@@ -7,7 +7,7 @@ pub use sound::{PreparedSound, Sound};
 
 use crate::{
     AuthoringDocument, Frame, RevisionChange,
-    graphics::{PreparedImageAssets, PreparedSvgAssets, PreparedTextLayouts},
+    graphics::{PreparedRasterAssets, PreparedTextLayouts},
     inspect::Inspection,
     preview::{ClipThumbnails, Filmstrip, Thumbnail},
     project_watch::ProjectInputs,
@@ -30,8 +30,7 @@ pub struct ProjectSnapshot {
     pub document: AuthoringDocument,
     pub inputs: ProjectInputs,
     pub revision: u64,
-    pub(crate) svg_assets: Arc<PreparedSvgAssets>,
-    pub(crate) image_assets: PreparedImageAssets,
+    pub(crate) raster_assets: Arc<PreparedRasterAssets>,
     pub(crate) text_layouts: Arc<PreparedTextLayouts>,
     audio_preparations: Arc<AtomicU64>,
 }
@@ -39,9 +38,7 @@ pub struct ProjectSnapshot {
 impl ProjectSnapshot {
     pub fn load(path: &Path, revision: u64) -> Result<Arc<Self>> {
         let (mut document, inputs) = ProjectInputs::load(path)?;
-        let svg_assets = PreparedSvgAssets::prepare(&document.project, None, &inputs)
-            .map_err(|error| error.context(inputs.clone()))?;
-        let image_assets = PreparedImageAssets::prepare(&document.project, None, &inputs)
+        let raster_assets = PreparedRasterAssets::prepare(&document.project, None, &inputs)
             .map_err(|error| error.context(inputs.clone()))?;
         let text_layouts = PreparedTextLayouts::prepare(&mut document.project, None, &inputs)
             .map_err(|error| error.context(inputs.clone()))?;
@@ -52,8 +49,7 @@ impl ProjectSnapshot {
             document,
             inputs,
             revision,
-            svg_assets: Arc::new(svg_assets),
-            image_assets,
+            raster_assets: Arc::new(raster_assets),
             text_layouts: Arc::new(text_layouts),
             audio_preparations: Arc::default(),
         }))
@@ -67,7 +63,7 @@ impl ProjectSnapshot {
         Transport::open_with_artwork(
             self.document.project.clone(),
             self.revision,
-            Some(Arc::clone(&self.svg_assets)),
+            Some(Arc::clone(&self.raster_assets)),
             Some(Arc::clone(&self.text_layouts)),
         )
     }
@@ -77,7 +73,7 @@ impl ProjectSnapshot {
             self.document.project.clone(),
             width,
             Default::default(),
-            Some(Arc::clone(&self.svg_assets)),
+            Arc::clone(&self.raster_assets),
             Some(Arc::clone(&self.text_layouts)),
         )
     }
@@ -120,15 +116,9 @@ impl PreparedSnapshot {
         let sound = previous_sound
             .filter(|_| change.damage.audio.is_empty())
             .cloned();
-        let svg_assets = PreparedSvgAssets::prepare(
+        let raster_assets = PreparedRasterAssets::prepare(
             &document.project,
-            Some((&previous.svg_assets, &previous.inputs)),
-            &inputs,
-        )
-        .map_err(|error| error.context(inputs.clone()))?;
-        let image_assets = PreparedImageAssets::prepare(
-            &document.project,
-            Some((&previous.image_assets, &previous.inputs)),
+            Some((&previous.raster_assets, &previous.inputs)),
             &inputs,
         )
         .map_err(|error| error.context(inputs.clone()))?;
@@ -142,8 +132,7 @@ impl PreparedSnapshot {
             document,
             inputs,
             revision: change.to_revision,
-            svg_assets: Arc::new(svg_assets),
-            image_assets,
+            raster_assets: Arc::new(raster_assets),
             text_layouts: Arc::new(text_layouts),
             audio_preparations: Arc::clone(&previous.audio_preparations),
         });
@@ -364,7 +353,7 @@ impl Viewer {
                 self.clip_thumbnails = Some(Arc::new(ClipThumbnails::for_project(
                     self.snapshot.document.project.clone(),
                     &self.inspection.placements,
-                    Some(Arc::clone(&self.snapshot.svg_assets)),
+                    Arc::clone(&self.snapshot.raster_assets),
                     Some(Arc::clone(&self.snapshot.text_layouts)),
                 )?));
             }
@@ -422,11 +411,11 @@ mod tests {
             r##"<svg width="32" height="16"><path d="M0 0 H32 V16 H0 Z" fill="#ff0000"/></svg>"##,
         )?;
         let mut viewer = Viewer::open(&project, 0)?;
-        let original = Arc::clone(&viewer.snapshot.svg_assets);
+        let original = Arc::clone(&viewer.snapshot.raster_assets);
         viewer.reopen(&project, Some(0))?;
         assert!(std::ptr::eq(
-            original.get(&svg).unwrap(),
-            viewer.snapshot.svg_assets.get(&svg).unwrap(),
+            original.svg(&svg).unwrap(),
+            viewer.snapshot.raster_assets.svg(&svg).unwrap(),
         ));
 
         fs::write(&svg, "invalid SVG")?;

@@ -2,8 +2,7 @@
 use super::GeometryClip;
 use crate::{
     graphics::{
-        Blend, Content, Graphic, PreparedImageAssets, PreparedSvgAssets, PreparedTextLayouts,
-        Raster, SampleTime,
+        Blend, Content, Graphic, PreparedRasterAssets, PreparedTextLayouts, Raster, SampleTime,
     },
     render::{LayerSample, affine::LayerSpace, sample_mask},
 };
@@ -13,9 +12,8 @@ use std::{cell::RefCell, collections::VecDeque, sync::Arc};
 /// Shared accepted artwork and editor-local query scratch.
 #[derive(Clone, Copy)]
 pub(in crate::editor) struct GeometryAssets<'a> {
-    pub svg: &'a PreparedSvgAssets,
+    pub rasters: &'a PreparedRasterAssets,
     pub text: &'a PreparedTextLayouts,
-    pub images: &'a PreparedImageAssets,
     pub canvas: [u32; 2],
     pub native: &'a NativeCoverageCache,
 }
@@ -95,11 +93,16 @@ pub(super) fn has_area(polygon: &[Point]) -> bool {
         .any(|p| (p[0][0] - x) * (p[1][1] - y) != (p[0][1] - y) * (p[1][0] - x))
 }
 
-fn artwork_bounds(content: &Content, svg: &PreparedSvgAssets) -> Result<Option<RasterBounds>> {
+fn artwork_bounds(
+    content: &Content,
+    rasters: &PreparedRasterAssets,
+) -> Result<Option<RasterBounds>> {
     Ok(match content {
         Content::Path(path) => Some(crate::render::path::raster_bounds(path)?),
         Content::Rect(rect) => Some(rect.paint_bounds()?),
-        Content::Svg { source } => svg.get(source).map(|raster| (raster.origin, raster.size)),
+        Content::Svg { source } => rasters
+            .svg(source)
+            .map(|raster| (raster.origin, raster.size)),
         _ => None,
     })
 }
@@ -148,7 +151,7 @@ pub(super) fn evaluate_leaf(
         }
         // TODO(editor): Use accepted image alpha when transparent regions
         // should pass through to the layers underneath.
-        Content::Image { source } => assets.images.get(source),
+        Content::Image { source } => assets.rasters.image_size(source),
         Content::Video(clip) => Some(clip.size),
         Content::Footage { .. } => Some(assets.canvas),
         // TODO(editor): Give backdrop adjustments a hit area from their
@@ -156,7 +159,7 @@ pub(super) fn evaluate_leaf(
         // TODO(editor): Ask the spatial renderer for depth-aware object hits.
         _ => {
             return Ok(
-                artwork_bounds(content, assets.svg)?.map(|raster| LeafGeometry {
+                artwork_bounds(content, assets.rasters)?.map(|raster| LeafGeometry {
                     raster,
                     region: HitRegion::Alpha,
                 }),
@@ -273,7 +276,7 @@ pub(super) fn sample_clip(
     sample: &LayerSample,
     scope_clock: u32,
     artwork: RasterBounds,
-    svg: &PreparedSvgAssets,
+    rasters: &PreparedRasterAssets,
 ) -> Result<Clip> {
     let mut clip = Clip {
         space: sample.space,
@@ -291,7 +294,7 @@ pub(super) fn sample_clip(
     if let Some(mask) = &layer.mask {
         let content = sample_mask(mask, sample.frame, 0.).unwrap_or_else(|| mask.as_content());
         let (origin, size) =
-            artwork_bounds(&content, svg)?.context("missing accepted mask geometry")?;
+            artwork_bounds(&content, rasters)?.context("missing accepted mask geometry")?;
         let [x, y] = mask.position.map(f64::from);
         let [l, t, r, b] = raster_box(origin, size);
         clip.mask = Some(SampledMask {
@@ -373,8 +376,8 @@ impl<'a> GeometryAssets<'a> {
     fn coverage_raster(self, content: &Content) -> Result<CoverageRaster<'a>> {
         match content {
             Content::Svg { source } => Ok(CoverageRaster::Svg(
-                self.svg
-                    .get(source)
+                self.rasters
+                    .svg(source)
                     .context("missing accepted SVG artwork")?,
             )),
             _ => self.native.raster(content).map(CoverageRaster::Native),
