@@ -177,9 +177,28 @@ impl ScenePainter<'_> {
                 .all(|m| m.coverage == MatteCoverage::Visible && m.occluded_by.is_none()),
             "a path-traced scene supplies visible-coverage mattes; projected and occluded-by mattes are not path traced yet"
         );
+        // The scene as authored, with every file it names replaced by a digest of the file's
+        // bytes: a picture does not depend on where a project is or how its path was spelled,
+        // and it does depend on footage or an image replaced under the same name. Geometry is
+        // keyed by what the importer produced, below.
+        let mut authored = serde_json::to_value(scene)?;
+        let mut clocked = false;
+        for model in authored["models"].as_array_mut().into_iter().flatten() {
+            model["source"] = serde_json::Value::Null;
+            identify_files(
+                &mut model["surfaces"],
+                &mut self.cache.file_digests,
+                &mut clocked,
+            )?;
+        }
         let mut hasher = StableHasher::new();
-        scene.hash(&mut hasher);
+        hasher.write(serde_json::to_string(&authored)?.as_bytes());
         frame.hash(&mut hasher);
+        // Video, a wipe and a periodic shader are sampled on the owning shot's clock, which a
+        // slide or a trim moves against the scene's own frame.
+        if clocked {
+            self.time.frame.hash(&mut hasher);
+        }
         self.time.fraction().to_bits().hash(&mut hasher);
         [target.width(), target.height()].hash(&mut hasher);
         for value in camera
@@ -190,9 +209,12 @@ impl ScenePainter<'_> {
         {
             value.to_bits().hash(&mut hasher);
         }
+        mattes.len().hash(&mut hasher);
         for matte in mattes {
             matte.object.hash(&mut hasher);
         }
+        // Devices agree to within noise, not exactly.
+        crate::render::path_trace::device().hash(&mut hasher);
         for model in &scene.models {
             let key = (model.source.clone(), model.prim.clone());
             let mesh = self
@@ -200,35 +222,13 @@ impl ScenePainter<'_> {
                 .meshes
                 .get(&key)
                 .context("mesh was not prepared before drawing")?;
-            let address = std::sync::Arc::as_ptr(mesh) as usize;
             let content = match self.cache.mesh_hashes.get(&key) {
-                Some(&(seen, content)) if seen == address => content,
+                Some((seen, content)) if std::sync::Arc::ptr_eq(seen, mesh) => *content,
                 _ => {
-                    let mut h = StableHasher::new();
-                    for v in &mesh.vertices {
-                        for f in v.position.into_iter().chain(v.normal).chain(v.uv) {
-                            h.write_u32(f.to_bits());
-                        }
-                        h.write_u32(v.material);
-                    }
-                    mesh.indices.hash(&mut h);
-                    for m in &mesh.materials {
-                        m.slot.hash(&mut h);
-                        for f in m
-                            .diffuse
-                            .into_iter()
-                            .chain(m.emissive)
-                            .chain(m.specular)
-                            .chain([m.metallic, m.roughness, m.clearcoat, m.clearcoat_roughness])
-                        {
-                            h.write_u32(f.to_bits());
-                        }
-                    }
-                    for image in &mesh.images {
-                        image.rgba.hash(&mut h);
-                    }
-                    let content = h.finish();
-                    self.cache.mesh_hashes.insert(key, (address, content));
+                    let content = mesh_content(mesh);
+                    self.cache
+                        .mesh_hashes
+                        .insert(key, (std::sync::Arc::clone(mesh), content));
                     content
                 }
             };
@@ -276,7 +276,11 @@ impl ScenePainter<'_> {
             Some(_) => Some(self.final_key(scene, target, frame, mattes, camera)?),
             None => None,
         };
-        if let Some(picture) = final_key.and_then(|key| self.cache.finals.get(key)) {
+        if let Some(picture) = final_key.and_then(|key| {
+            self.cache
+                .finals
+                .get(key, [target.width(), target.height()], mattes.len())
+        }) {
             self.stats.path_traced_final += 1;
             return Ok(final_textures(gpu, &picture));
         }
@@ -356,6 +360,7 @@ impl ScenePainter<'_> {
                 final_models.push(FinalModel {
                     id: model.id.clone(),
                     mesh: key.clone(),
+                    content: self.cache.mesh_hashes.get(&key).map_or(0, |m| m.1),
                     position: model.position.map(f32::from),
                     rotation_degrees: rotation,
                     parts: parts
@@ -540,6 +545,94 @@ impl ScenePainter<'_> {
             self.stats.object_matte_scratch_bytes.max(matte_bytes);
         Ok((pass.output.clone(), resolved_mattes.cloned()))
     }
+}
+
+/// Everything of an imported mesh that a renderer reads.
+pub(crate) fn mesh_content(mesh: &nothing_spatial::Mesh) -> u64 {
+    let mut h = StableHasher::new();
+    mesh.vertices.len().hash(&mut h);
+    for v in &mesh.vertices {
+        for f in v.position.into_iter().chain(v.normal).chain(v.uv) {
+            h.write_u32(f.to_bits());
+        }
+        h.write_u32(v.material);
+    }
+    mesh.indices.hash(&mut h);
+    // Their debug form names every field, including ones added later.
+    format!("{:?}{:?}", mesh.materials, mesh.parts).hash(&mut h);
+    mesh.images.len().hash(&mut h);
+    for image in &mesh.images {
+        [image.width, image.height].hash(&mut h);
+        image.rgba.hash(&mut h);
+    }
+    h.finish()
+}
+
+/// A digest of a file's bytes, remembered until its size or modification time changes.
+pub(crate) type FileDigests =
+    std::collections::HashMap<std::path::PathBuf, (u64, Option<std::time::SystemTime>, u64)>;
+
+/// Replace every string in `value` that names a file with a digest of that file, and report
+/// whether the layers sample the shot's clock rather than only their own frame.
+fn identify_files(
+    value: &mut serde_json::Value,
+    digests: &mut FileDigests,
+    clocked: &mut bool,
+) -> Result<()> {
+    use serde_json::Value;
+    match value {
+        Value::String(text) => {
+            let path = std::path::Path::new(text.as_str());
+            let Ok(file) = std::fs::metadata(path) else {
+                return Ok(());
+            };
+            if !file.is_file() {
+                return Ok(());
+            }
+            let stamp = (file.len(), file.modified().ok());
+            let digest = match digests.get(path) {
+                Some(&(len, modified, digest)) if (len, modified) == stamp => digest,
+                _ => {
+                    use std::io::Read;
+                    let mut h = StableHasher::new();
+                    let mut reader = std::fs::File::open(path)
+                        .with_context(|| format!("read {}", path.display()))?;
+                    let mut block = vec![0; 1 << 20];
+                    loop {
+                        let n = reader.read(&mut block)?;
+                        if n == 0 {
+                            break;
+                        }
+                        h.write(&block[..n]);
+                    }
+                    let digest = h.finish();
+                    digests.insert(path.to_path_buf(), (stamp.0, stamp.1, digest));
+                    digest
+                }
+            };
+            *text = format!("file:{digest:016x}");
+        }
+        Value::Array(items) => {
+            for item in items {
+                identify_files(item, digests, clocked)?;
+            }
+        }
+        Value::Object(fields) => {
+            let kind = fields.get("type").and_then(Value::as_str);
+            ensure!(
+                !matches!(kind, Some("footage" | "backdrop")),
+                "a path-traced surface cannot show the shot's footage or a backdrop yet"
+            );
+            *clocked |= kind == Some("video")
+                || fields.contains_key("wipe")
+                || fields.contains_key("period_frames");
+            for item in fields.values_mut() {
+                identify_files(item, digests, clocked)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 #[cfg(test)]

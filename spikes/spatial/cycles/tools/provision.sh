@@ -12,22 +12,43 @@ ROOT="$(cd "$HERE/../../.." && pwd)"
 W="$ROOT/.local/cycles"
 mkdir -p "$W" && cd "$W"
 
-if [ ! -d cycles ]; then
-  git clone --depth 1 --branch v5.3.0 https://projects.blender.org/blender/cycles.git cycles
-  (cd cycles && python3 src/cmake/make_update.py && git apply "$HERE/patches/0001-add-n4-bridge-subdirectory.patch")
+# Fetch a release tag and insist on the commit it named when this was written: a tag can move.
+fetch() { # directory, repository, tag, commit
+  [ -d "$1" ] || git clone --depth 1 --branch "$3" "$2" "$1"
+  local found
+  found="$(git -C "$1" rev-parse HEAD)"
+  if [ "$found" != "$4" ]; then
+    echo "$1 is at $found; $3 was $4 when this bundle was qualified" >&2
+    exit 1
+  fi
+}
+
+# Each step can be repeated after a failure; a finished one is skipped.
+fetch cycles https://projects.blender.org/blender/cycles.git v5.3.0 b3f6262640f1a2f2d10b55b6ffccbf310ce0f981
+if [ ! -f cycles/.n4-libraries ]; then
+  (cd cycles && python3 src/cmake/make_update.py)
+  touch cycles/.n4-libraries
 fi
+PATCH="$HERE/patches/0001-add-n4-bridge-subdirectory.patch"
+git -C cycles apply --reverse --check "$PATCH" 2>/dev/null || git -C cycles apply "$PATCH"
 cmake -S cycles -B cycles-build -G Ninja -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX="$W/install" -DN4_BRIDGE_DIR="$HERE/native" \
   -DWITH_CYCLES_USD=OFF -DWITH_CYCLES_HYDRA_RENDER_DELEGATE=OFF -DWITH_CYCLES_ALEMBIC=OFF \
   -DWITH_CYCLES_OSL=OFF -DWITH_CYCLES_OPENVDB=OFF -DWITH_CYCLES_NANOVDB=OFF -DWITH_CYCLES_OPENSUBDIV=OFF
-# Re-installing the standalone `cycles` tool can report harmless install_name_tool errors.
-cmake --build cycles-build --target install || test -f install/libn4cycles.dylib
+cmake --build cycles-build --target n4cycles
+# Installing the standalone `cycles` tool a second time can report install_name_tool errors.
+# They are tolerated only when the bridge that was just built is the one installed.
+cmake --build cycles-build --target install || true
+if [ ! -f install/libn4cycles.dylib ] || [ cycles-build/lib/libn4cycles.dylib -nt install/libn4cycles.dylib ]; then
+  echo "the Cycles bundle was not installed" >&2
+  exit 1
+fi
 
 # Cycles' precompiled OpenImageIO statically includes libheif (LGPL-3). Replace it with a build
 # that has no HEIF support and depends only on libraries Cycles already ships.
 L="$W/cycles/lib/macos_arm64"
-[ -d oiio ] || git clone --depth 1 --branch v3.1.16.0 https://github.com/AcademySoftwareFoundation/OpenImageIO.git oiio
-[ -d tiff ] || git clone --depth 1 --branch v4.7.1 https://gitlab.com/libtiff/libtiff.git tiff
+fetch oiio https://github.com/AcademySoftwareFoundation/OpenImageIO.git v3.1.16.0 f3f12ab761fbccaa644937780e7246674033c407
+fetch tiff https://gitlab.com/libtiff/libtiff.git v4.7.1 5fe20d0e9aba49a6a350ed533459d1505203838f
 cmake -S tiff -B tiff-build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$W/tiff-install" \
   -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON -DCMAKE_INSTALL_LIBDIR=lib \
   -DCMAKE_FIND_FRAMEWORK=NEVER -DCMAKE_IGNORE_PREFIX_PATH="/opt/homebrew;/usr/local" \
@@ -57,4 +78,6 @@ codesign -f -s - $I/libOpenImageIO.dylib $I/libOpenImageIO_Util.dylib
 cp tiff/LICENSE.md install/license/libtiff-LICENSE.md
 cp oiio/LICENSE.md install/license/OpenImageIO-LICENSE.md
 if nm $I/libOpenImageIO.dylib | grep -qi heif_; then echo "HEIF symbols still present" >&2; exit 1; fi
+# Cargo links the bundle only once its build script has run again.
+touch "$HERE/build.rs"
 echo "Cycles bundle ready at $W/install"

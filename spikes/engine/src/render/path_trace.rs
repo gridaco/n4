@@ -9,24 +9,29 @@ use std::sync::Arc;
 
 pub(crate) type Meshes = HashMap<(PathBuf, String), Arc<Mesh>>;
 
-/// Stops a path-traced render in flight from another thread. The interrupted call returns an
-/// error and the tracer stays usable.
+/// Asks a path-traced render to stop, from another thread. The request stands until `rearm`:
+/// a render in flight returns an error within a few samples, and one that starts while the
+/// request stands returns at once. The tracer stays usable either way.
 #[derive(Clone, Default)]
-pub struct FinalCancel(Arc<CancelState>);
-
-#[derive(Default)]
-struct CancelState {
-    #[cfg(feature = "cycles")]
-    monitor: std::sync::Mutex<Option<nothing_spatial_cycles::Monitor>>,
-}
+pub struct FinalCancel(Arc<std::sync::atomic::AtomicBool>);
 
 impl FinalCancel {
     pub fn cancel(&self) {
-        #[cfg(feature = "cycles")]
-        if let Some(monitor) = *self.0.monitor.lock().unwrap() {
-            monitor.cancel();
-        }
+        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
     }
+    /// Withdraw the request, ahead of a render that should run.
+    pub fn rearm(&self) {
+        self.0.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+    #[cfg_attr(not(feature = "cycles"), allow(dead_code))]
+    pub(crate) fn flag(&self) -> &std::sync::atomic::AtomicBool {
+        &self.0
+    }
+}
+
+/// The Cycles device Finals are traced on: `N4_CYCLES_DEVICE`, or the GPU.
+pub(crate) fn device() -> String {
+    std::env::var("N4_CYCLES_DEVICE").unwrap_or_else(|_| "METAL".into())
 }
 
 /// Why a path-traced scene cannot be finished in this build, or `None` when it can.
@@ -108,14 +113,11 @@ mod cycles {
     }
 
     /// What must be rebuilt rather than updated when it changes.
-    fn signature(request: &FinalRequest, meshes: &Meshes) -> u64 {
+    fn signature(request: &FinalRequest) -> u64 {
         let mut h = crate::graphics::StableHasher::new();
         for model in &request.models {
             model.mesh.hash(&mut h);
-            meshes
-                .get(&model.mesh)
-                .map(|m| Arc::as_ptr(m) as usize)
-                .hash(&mut h);
+            model.content.hash(&mut h);
             for s in &model.surfaces {
                 s.slot.hash(&mut h);
                 (s.role as u8).hash(&mut h);
@@ -161,8 +163,7 @@ mod cycles {
 
     impl Scene {
         fn build(request: &FinalRequest, meshes: &Meshes, signature: u64) -> Result<Self> {
-            let device = std::env::var("N4_CYCLES_DEVICE").unwrap_or_else(|_| "METAL".into());
-            let mut session = Session::new(&device, 0)?;
+            let mut session = Session::new(&super::device(), 0)?;
             let mut models = Vec::new();
             for (index, model) in request.models.iter().enumerate() {
                 let mesh = meshes
@@ -238,7 +239,16 @@ mod cycles {
             meshes: &Meshes,
             artwork: Vec<Vec<Vec<u8>>>,
         ) -> Result<FinalPicture> {
-            let signature = signature(request, meshes);
+            // Building a scene and uploading artwork is not worth starting for a picture
+            // nobody waits for any more.
+            ensure!(
+                !self
+                    .cancel
+                    .flag()
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                "path-traced Final was interrupted"
+            );
+            let signature = signature(request);
             let index = match self.scenes.iter().position(|s| s.signature == signature) {
                 Some(index) => index,
                 None => {
@@ -309,10 +319,15 @@ mod cycles {
                 // A frame's sample pattern follows from its identity, never from render order.
                 seed: (request.recipe.seed ^ request.key.0 as u32) & 0x7fff_ffff,
             };
-            *self.cancel.0.monitor.lock().unwrap() = Some(scene.session.monitor());
-            let frame = scene.session.render(request.size, &recipe, &ids);
-            *self.cancel.0.monitor.lock().unwrap() = None;
-            let frame = frame?;
+            let frame = scene.session.render_with(
+                request.size,
+                &recipe,
+                nothing_spatial_cycles::Outputs {
+                    mask_pass_ids: &ids,
+                    stop: Some(self.cancel.flag()),
+                    ..Default::default()
+                },
+            )?;
             ensure!(
                 frame.color.len() == (request.size[0] * request.size[1] * 4) as usize,
                 "Cycles returned an unexpected picture size"
@@ -374,5 +389,16 @@ mod tests {
         assert_eq!(bytes[7], 128);
         // One stop up doubles the straight value before the curve.
         assert_eq!(super::finish(&[0.25, 0., 0., 1.], 1.)[0], 188);
+    }
+}
+
+#[cfg(all(test, feature = "cycles"))]
+mod revision {
+    #[test]
+    fn stored_pictures_are_keyed_by_the_bridge_that_is_linked() {
+        assert_eq!(
+            crate::graphics::FINAL_TRACER,
+            nothing_spatial_cycles::REVISION
+        );
     }
 }

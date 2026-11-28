@@ -18,6 +18,8 @@ spikes/spatial/cycles/tools/provision.sh      # about 2.6 GB of downloads into .
 (cd spikes && cargo build --release -p nothing-spatial-cycles --examples)
 ```
 
+The script can be run again after a failure. It checks each source against the commit its release tag named when the bundle was qualified.
+
 `.local/cycles/install` then holds `libn4cycles.dylib`, its `lib/`, and `source/`, the kernel source Cycles compiles for Metal at run time. The three stay together. Set `N4_CYCLES_DIR` to use a bundle elsewhere. The first render on a machine compiles Cycles' GPU programs and took about three minutes on an M4 Pro; later starts take about a second.
 
 ## Check
@@ -30,6 +32,8 @@ cd spikes
 ./engine/target/release/examples/spike render --shot ../.local/cycles/shots/field-unit-reflection/shot.json \
   --frames 0..51 --samples 64 --denoise --masks --out ../.local/cycles/out/range
 ```
+
+The crate's tests skip without a bundle; `N4_REQUIRE_CYCLES=1 cargo test` fails instead. `N4_CYCLES_TEST_DEVICE=METAL` repeats the stop test on the GPU.
 
 `calib` checks light units and the camera against quantities with known answers. [`reference/`](reference/blender_reference.py) renders the same shot file with Blender's own importer and Cycles for comparison.
 
@@ -45,4 +49,7 @@ cd spikes
 - A rect light's strength with `normalize` off is radiance times pi.
 - In-progress pictures arrive through `Monitor::snapshot` only from a session made with `Session::with_snapshots`. Cycles then denoises and reads back intermediate results, which cost about 0.6 s on a 64-sample 1080p frame, so the engine's Final renders do not ask for them. Cycles' viewport scheduling (`background = false`) never returns to a blocking caller; do not use it.
 - `Session::get_progress` is declared by Cycles but not defined; use `progress.get_progress()`. A link failure here is easy to miss when filtering build output for compile errors.
+- Do not stop a render with `Session::cancel`. It also cancels the device, and a Metal device retired that way never compiles a kernel again, so the next scene change that needs one waits forever. The bridge sets the progress cancel and stops the path tracer itself.
+- Cycles looks at its progress cancel only between batches of samples, which were seconds apart on the CPU device. A watcher thread in `n4c_render` stops the batch in flight.
+- Raise `REVISION` in `src/lib.rs` and `TRACER` in the engine's Final store together whenever a change here can alter a picture; stored pictures are keyed by it.
 - Re-renders are not bit-identical: on a 51-frame range no frame matched, though no pixel differed by more than 2 of 255 after the finish.

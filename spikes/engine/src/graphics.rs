@@ -26,6 +26,8 @@ use unicode_segmentation::UnicodeSegmentation;
 mod final_store;
 mod live_surface_cache;
 mod spatial;
+#[cfg(all(test, feature = "cycles"))]
+pub(crate) use final_store::TRACER as FINAL_TRACER;
 pub(crate) use final_store::{
     FinalKey, FinalModel, FinalPicture, FinalRect, FinalRequest, FinalStore, FinalSurface,
     StableHasher,
@@ -922,8 +924,10 @@ const TRANSIENT_TEXTURE_ENTRIES: usize = 64;
 #[derive(Default)]
 pub(crate) struct PaintCache {
     pub(crate) finals: FinalStore,
-    /// Content identity of prepared meshes, by the allocation they were computed from.
-    pub(crate) mesh_hashes: HashMap<(PathBuf, String), (usize, u64)>,
+    /// Content identity of prepared meshes. Holding the mesh keeps its address from being
+    /// reused by a different one.
+    pub(crate) mesh_hashes: HashMap<(PathBuf, String), (Arc<nothing_spatial::Mesh>, u64)>,
+    pub(crate) file_digests: crate::render::gpu::spatial::FileDigests,
     pub(crate) live_surfaces: live_surface_cache::LiveSurfaceCache,
     pub(crate) meshes: HashMap<(PathBuf, String), Arc<nothing_spatial::Mesh>>,
     pub(crate) mesh_buffers: HashMap<(PathBuf, String), nothing_spatial_wgpu::MeshBuffers>,
@@ -1326,6 +1330,7 @@ impl PaintCache {
                 .any(|m| m.surfaces.contains(surface))
         });
         self.meshes.retain(|k, _| needed.meshes.contains(k));
+        self.mesh_hashes.retain(|k, _| needed.meshes.contains(k));
         self.mesh_buffers.retain(|k, _| needed.meshes.contains(k));
         self.measured_paths
             .retain(|d, _| needed.measured_paths.contains(d));

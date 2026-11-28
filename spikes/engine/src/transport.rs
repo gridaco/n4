@@ -33,11 +33,20 @@ struct State<T> {
 struct Queue<T> {
     state: Mutex<State<T>>,
     changed: Condvar,
-    /// Stops a Final in flight when the user moves on.
-    interrupt: Mutex<Option<Box<dyn Fn() + Send>>>,
+    /// With `true`, asks a Final being traced to stop; the request stands until `false`
+    /// withdraws it ahead of the next trace.
+    interrupt: Mutex<Option<Interrupt>>,
 }
 
+type Interrupt = Arc<dyn Fn(bool) + Send + Sync>;
+
 impl<T> Queue<T> {
+    fn interrupt(&self, stop: bool) {
+        if let Some(interrupt) = &*self.interrupt.lock().unwrap() {
+            interrupt(stop);
+        }
+    }
+
     fn new() -> Self {
         Self {
             state: Mutex::new(State {
@@ -61,10 +70,8 @@ impl<T> Queue<T> {
         state.range = range;
         state.ready.clear();
         state.finish = None;
-        if state.finishing
-            && let Some(interrupt) = &*self.interrupt.lock().unwrap()
-        {
-            interrupt();
+        if state.finishing {
+            self.interrupt(true);
         }
         self.changed.notify_one();
     }
@@ -117,6 +124,9 @@ impl<T> Queue<T> {
             {
                 let generation = state.generation;
                 state.finishing = true;
+                // Under the lock, so a request to stop an earlier trace cannot land on this one
+                // and one meant for this one cannot be withdrawn.
+                self.interrupt(false);
                 drop(state);
                 let result = finish(engine, frame);
                 let mut state = self.state.lock().unwrap();
@@ -155,13 +165,11 @@ impl<T> Queue<T> {
     fn stop(&self) {
         let mut state = self.state.lock().unwrap();
         state.shutdown = true;
-        if state.finishing
-            && let Some(interrupt) = &*self.interrupt.lock().unwrap()
-        {
-            interrupt();
+        if state.finishing {
+            self.interrupt(true);
         }
         if let Some(progress) = &state.export_progress {
-            progress.cancelled.store(true, Ordering::Relaxed);
+            progress.cancel();
         }
         state.export = None;
         self.changed.notify_one();
@@ -172,6 +180,17 @@ impl<T> Queue<T> {
 struct ExportProgress {
     rendered: AtomicU32,
     cancelled: AtomicBool,
+    /// Reaches a Final the export is tracing, which can take seconds a frame.
+    interrupt: Option<Interrupt>,
+}
+
+impl ExportProgress {
+    fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Relaxed);
+        if let Some(interrupt) = &self.interrupt {
+            interrupt(true);
+        }
+    }
 }
 
 struct ExportWork {
@@ -183,6 +202,15 @@ struct ExportWork {
 
 impl ExportWork {
     fn run(&self, engine: &mut Engine) -> Result<ExportReport> {
+        // Withdraw a stop left by an earlier trace. One meant for this export sets
+        // `cancelled` first, so it is seen here or reaches the trace.
+        if let Some(interrupt) = &self.progress.interrupt {
+            interrupt(false);
+        }
+        ensure!(
+            !self.progress.cancelled.load(Ordering::Relaxed),
+            "export cancelled"
+        );
         write_mp4_with_progress(engine, &self.path, self.audio.as_deref(), |n| {
             self.progress.rendered.store(n, Ordering::Relaxed);
             ensure!(
@@ -210,7 +238,7 @@ impl ExportJob {
     }
 
     pub fn cancel(&self) {
-        self.progress.cancelled.store(true, Ordering::Relaxed);
+        self.progress.cancel();
     }
 
     pub fn poll(&self) -> Result<Option<ExportReport>> {
@@ -291,7 +319,13 @@ impl Transport {
                 let traces = Engine::path_trace_unavailable().is_none()
                     && engine.persist_finals_in_user_cache().is_ok();
                 let cancel = engine.final_cancel();
-                *worker_queue.interrupt.lock().unwrap() = Some(Box::new(move || cancel.cancel()));
+                *worker_queue.interrupt.lock().unwrap() = Some(Arc::new(move |stop| {
+                    if stop {
+                        cancel.cancel()
+                    } else {
+                        cancel.rearm()
+                    }
+                }));
                 if initialized.send(Ok(())).is_ok() {
                     worker_queue.run(
                         &mut engine,
@@ -379,8 +413,17 @@ impl Transport {
         state.generation += 1;
         state.range = 0..0;
         state.ready.clear();
+        state.finish = None;
+        // The export does not wait behind a Final traced for a parked frame.
+        if state.finishing {
+            self.queue.interrupt(true);
+        }
         let (result, receive) = mpsc::sync_channel(1);
-        let progress = Arc::new(ExportProgress::default());
+        let progress = Arc::new(ExportProgress {
+            rendered: AtomicU32::new(0),
+            cancelled: AtomicBool::new(false),
+            interrupt: self.queue.interrupt.lock().unwrap().clone(),
+        });
         state.export_progress = Some(Arc::clone(&progress));
         state.export = Some(ExportWork {
             path,
@@ -575,9 +618,13 @@ mod tests {
         let interrupted = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&interrupted);
         let interrupt_allow = allow_tx.clone();
-        *queue.interrupt.lock().unwrap() = Some(Box::new(move || {
-            flag.store(true, Ordering::Relaxed);
-            let _ = interrupt_allow.send(false);
+        let interrupt_allow = Mutex::new(interrupt_allow);
+        *queue.interrupt.lock().unwrap() = Some(Arc::new(move |stop| {
+            // The worker withdraws a stale request before each trace; only a stop counts.
+            if stop {
+                flag.store(true, Ordering::Relaxed);
+                let _ = interrupt_allow.lock().unwrap().send(false);
+            }
         }));
         let worker = thread::spawn(move || {
             other.run(

@@ -293,6 +293,21 @@ fn action(
     }
 }
 
+/// Say which picture of a path-traced scene this is; other pictures need no label.
+fn final_label(frame: &n4_engine::Frame) -> &'static str {
+    let paint = &frame.trace.graphics;
+    if paint.path_traced_draft > 0 {
+        match n4_engine::Engine::path_trace_unavailable() {
+            None => " — Draft · tracing Final",
+            Some(_) => " — Draft · no path tracer in this build",
+        }
+    } else if paint.path_traced_final > 0 {
+        " — Final"
+    } else {
+        ""
+    }
+}
+
 fn save_canvas(canvas: &WindowCanvas, path: &Path) -> Result<()> {
     let (w, h) = canvas.output_size().map_err(anyhow::Error::msg)?;
     let pixels = canvas
@@ -584,6 +599,7 @@ fn run(args: Args) -> Result<()> {
                         parked,
                         next.transport,
                         sound,
+                        &picture,
                     );
                     Ok((control, new_movie, new_timeline))
                 })();
@@ -630,7 +646,9 @@ fn run(args: Args) -> Result<()> {
                 dirty = true;
                 inspector_drag = false;
                 mouse.capture(false);
-                canvas.window_mut().set_title(&title)?;
+                canvas
+                    .window_mut()
+                    .set_title(&format!("{title}{}", final_label(&picture)))?;
                 println!(
                     "Reloaded at frame {}: {}",
                     control.cursor,
@@ -692,18 +710,7 @@ fn run(args: Args) -> Result<()> {
         let new_picture = frame.is_some();
         if let Some(frame) = frame {
             displayed_revision = frame.trace.revision;
-            // Say which picture of a path-traced scene this is; other pictures need no label.
-            let paint = &frame.trace.graphics;
-            let label = if paint.path_traced_draft > 0 {
-                match n4_engine::Engine::path_trace_unavailable() {
-                    None => " — Draft · tracing Final",
-                    Some(_) => " — Draft · no path tracer in this build",
-                }
-            } else if paint.path_traced_final > 0 {
-                " — Final"
-            } else {
-                ""
-            };
+            let label = final_label(&frame);
             canvas.window_mut().set_title(&format!("{title}{label}"))?;
             if let Some(trial) = &mut reopen_trial {
                 trial.picture(&frame.rgba);

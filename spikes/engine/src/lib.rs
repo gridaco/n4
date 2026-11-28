@@ -246,20 +246,32 @@ impl Engine {
     }
 
     /// Keep finished path-traced pictures in a directory, so they outlive this engine.
+    /// Nothing is ever deleted from a directory named this way.
     pub fn persist_finals(&mut self, directory: PathBuf) -> Result<()> {
-        self.graphics.finals.persist_in(directory)
+        self.graphics.finals.persist_in(directory, None)
     }
 
     /// Keep them in the user's cache, shared by every project and host on this machine. Keys
     /// describe content, so a copy of a project finds the same pictures. `N4_FINAL_STORE` names
-    /// another directory.
+    /// another directory. The cache holds 20 GB, or `N4_FINAL_STORE_GB`; beyond that the
+    /// pictures used longest ago are deleted and would be traced again.
     pub fn persist_finals_in_user_cache(&mut self) -> Result<()> {
         let directory = match std::env::var_os("N4_FINAL_STORE") {
             Some(directory) => PathBuf::from(directory),
             None => PathBuf::from(std::env::var_os("HOME").context("HOME is not set")?)
                 .join("Library/Caches/n4/final"),
         };
-        self.persist_finals(directory)
+        let gigabytes = match std::env::var("N4_FINAL_STORE_GB") {
+            Ok(value) => value
+                .parse::<u64>()
+                .ok()
+                .filter(|&g| g > 0)
+                .context("N4_FINAL_STORE_GB is a whole number of gigabytes above zero")?,
+            Err(_) => 20,
+        };
+        self.graphics
+            .finals
+            .persist_in(directory, Some(gigabytes << 30))
     }
 
     /// A handle that interrupts `render_final` from another thread.

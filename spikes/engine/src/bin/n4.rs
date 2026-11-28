@@ -328,8 +328,11 @@ fn main() -> Result<()> {
         Command::Export { project, out } => {
             let mut engine = Engine::new(Project::load(&project)?)?;
             // Reuse path-traced pictures a viewer or `finish` already made, and keep new ones.
-            if Engine::path_trace_unavailable().is_none() {
-                engine.persist_finals_in_user_cache()?;
+            if Engine::path_trace_unavailable().is_none()
+                && let Err(error) = engine.persist_finals_in_user_cache()
+            {
+                // Only a project with path-traced scenes misses it, and then only for reuse.
+                eprintln!("Path-traced pictures are not kept: {error:#}");
             }
             let report = n4_engine::export::write_mp4(&mut engine, &out)?;
             println!("{}", serde_json::to_string_pretty(&report)?);

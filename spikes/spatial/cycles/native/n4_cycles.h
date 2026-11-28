@@ -86,6 +86,10 @@ typedef struct {
   const int32_t *mask_pass_ids;
   int32_t depth;       /* also capture camera distance per pixel */
   int32_t cryptomatte; /* also capture three Cryptomatte asset layers */
+  /* Optional. Polled from Cycles' threads throughout this render, starting before the scene
+   * is synchronised; a non-zero answer stops it and the render reports `cancelled`. */
+  int32_t (*stop)(void *user);
+  void *stop_user;
 } N4Render;
 
 typedef struct {
@@ -98,15 +102,16 @@ typedef struct {
 
 /* Blocking render of one frame with the current scene. */
 int32_t n4c_render(N4Cycles *s, const N4Render *r, N4Timing *timing);
-/* rgba: width*height*4 floats, scene-linear, premultiplied, top row first. */
-int32_t n4c_read_color(N4Cycles *s, float *rgba);
+/* Each read fails unless `count`, the number of floats the buffer holds, is the pass's size.
+ * rgba: width*height*4 floats, scene-linear, premultiplied, top row first. */
+int32_t n4c_read_color(N4Cycles *s, float *rgba, int64_t count);
 /* One float per pixel, coverage 0..1, for mask index i of the last render. */
-int32_t n4c_read_mask(N4Cycles *s, int32_t i, float *coverage);
+int32_t n4c_read_mask(N4Cycles *s, int32_t i, float *coverage, int64_t count);
 /* Camera-space depth, one float per pixel; not antialiased by Cycles. */
-int32_t n4c_read_depth(N4Cycles *s, float *depth);
+int32_t n4c_read_depth(N4Cycles *s, float *depth, int64_t count);
 /* Cryptomatte asset layer 0..2: width*height*4 floats holding two (id, coverage) pairs per pixel. */
-int32_t n4c_read_cryptomatte(N4Cycles *s, int32_t layer, float *rgba);
-/* Safe to call from another thread while n4c_render blocks. */
+int32_t n4c_read_cryptomatte(N4Cycles *s, int32_t layer, float *rgba, int64_t count);
+/* Stop the render in flight; without one it does nothing. Safe from another thread. */
 void n4c_cancel(N4Cycles *s);
 float n4c_progress(N4Cycles *s);
 /* Number of in-progress pictures captured so far in the current render; n4c_read_color returns the latest. */

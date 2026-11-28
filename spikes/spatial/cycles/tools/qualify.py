@@ -20,14 +20,14 @@ MAKE = REPO / "spikes/spatial/cycles/shots/field-unit-reflection/make_project.py
 FRAMES = [4, 25, 50]
 
 
-def run(*args, env=None):
-    out = subprocess.run([str(a) for a in args], capture_output=True, text=True, env=env)
+def run(*args, env=None, cwd=None):
+    out = subprocess.run([str(a) for a in args], capture_output=True, text=True, env=env, cwd=cwd)
     if out.returncode:
         sys.exit(f"{' '.join(map(str, args))}\n{out.stdout}\n{out.stderr}")
     return out.stdout
 
 
-def render(project, out, store, frames=FRAMES, final=True):
+def render(project, out, store, frames=FRAMES, final=True, cwd=None):
     """With `final`, trace what is missing. Without it, show stored Finals and Draft the rest."""
     if out.exists():
         shutil.rmtree(out)
@@ -35,7 +35,7 @@ def render(project, out, store, frames=FRAMES, final=True):
     if final:
         args += ["--final"]
     started = time.time()
-    run(*args)
+    run(*args, cwd=cwd)
     receipt = json.loads((out / "receipt.json").read_text())
     pictures = [np.array(Image.open(out / f["file"]).convert("RGB")).astype(int) for f in receipt["frames"]]
     return {
@@ -85,6 +85,14 @@ def main():
     c["a second process reuses stored pictures, in reverse order"] = {"pass": again["traced"] == 0 and identical, **again, "identical": identical}
     plain, plain_px = render(project, out / "plain", store, final=False)
     c["an ordinary render shows a stored Final"] = {"pass": plain["final"] == [1, 1, 1] and all((a == b).all() for a, b in zip(plain_px, base)), **plain}
+
+    # Pictures are identified by content: neither the spelling of the path nor the place matters.
+    spelled, _ = render("project", out / "relative", store, cwd=out)
+    shutil.copytree(project, out / "elsewhere" / "copy")
+    copied, _ = render(out / "elsewhere" / "copy", out / "copied", store)
+    c["a relative path and a copy of the project find the same pictures"] = {
+        "pass": spelled["traced"] == 0 and copied["traced"] == 0 and spelled["final"] == [1, 1, 1] and copied["final"] == [1, 1, 1],
+        "relative": spelled, "copy": copied}
 
     cold, cold_px = render(project, out / "cold", out / "store-cold", frames=FRAMES[::-1])
     worst = max(int(np.abs(a - b).max()) for a, b in zip(cold_px[::-1], base))

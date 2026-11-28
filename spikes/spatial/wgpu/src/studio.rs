@@ -773,8 +773,11 @@ impl Renderer {
         let shadowed = !lights.is_empty() || rect_key.is_some();
         let sun = normalized(match (lights.first(), rect_key) {
             (Some(l), _) => l.direction,
-            (None, Some(r)) => std::array::from_fn(|i| studio.shadow_center[i] - r.center[i]),
-            (None, None) => [0., -1., 0.],
+            // A rect at the shadow centre itself has no direction to it; shine down.
+            (None, Some(r)) if r.center != studio.shadow_center => {
+                std::array::from_fn(|i| studio.shadow_center[i] - r.center[i])
+            }
+            _ => [0., -1., 0.],
         })?;
         let up = if sun[1].abs() > 0.95 {
             [0., 0., 1.]

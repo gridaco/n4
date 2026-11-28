@@ -4,6 +4,8 @@
 use anyhow::{Result, bail, ensure};
 use nothing_spatial::{Mesh, TextureChannel};
 use std::ffi::{CStr, CString};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 
 pub mod pose;
 
@@ -47,6 +49,8 @@ mod sys {
         pub mask_pass_ids: *const i32,
         pub depth: i32,
         pub cryptomatte: i32,
+        pub stop: Option<unsafe extern "C" fn(*mut std::ffi::c_void) -> i32>,
+        pub stop_user: *mut std::ffi::c_void,
     }
     #[repr(C)]
     #[derive(Default, Clone, Copy, Debug)]
@@ -128,11 +132,16 @@ mod sys {
             near_clip: f32,
         );
         pub fn n4c_render(s: *mut N4Cycles, r: *const N4Render, timing: *mut N4Timing) -> i32;
-        pub fn n4c_read_color(s: *mut N4Cycles, rgba: *mut f32) -> i32;
-        pub fn n4c_read_mask(s: *mut N4Cycles, i: i32, coverage: *mut f32) -> i32;
+        pub fn n4c_read_color(s: *mut N4Cycles, rgba: *mut f32, count: i64) -> i32;
+        pub fn n4c_read_mask(s: *mut N4Cycles, i: i32, coverage: *mut f32, count: i64) -> i32;
         pub fn n4c_peak_memory(s: *mut N4Cycles) -> i64;
-        pub fn n4c_read_depth(s: *mut N4Cycles, depth: *mut f32) -> i32;
-        pub fn n4c_read_cryptomatte(s: *mut N4Cycles, layer: i32, rgba: *mut f32) -> i32;
+        pub fn n4c_read_depth(s: *mut N4Cycles, depth: *mut f32, count: i64) -> i32;
+        pub fn n4c_read_cryptomatte(
+            s: *mut N4Cycles,
+            layer: i32,
+            rgba: *mut f32,
+            count: i64,
+        ) -> i32;
         pub fn n4c_cancel(s: *mut N4Cycles);
         pub fn n4c_progress(s: *mut N4Cycles) -> f32;
         pub fn n4c_snapshot_count(s: *mut N4Cycles) -> i32;
@@ -266,19 +275,29 @@ mod sys {
         ) -> i32 {
             unreachable!("no Cycles session can exist without the bundle")
         }
-        pub unsafe fn n4c_read_color(_s: *mut N4Cycles, _rgba: *mut f32) -> i32 {
+        pub unsafe fn n4c_read_color(_s: *mut N4Cycles, _rgba: *mut f32, _count: i64) -> i32 {
             unreachable!("no Cycles session can exist without the bundle")
         }
-        pub unsafe fn n4c_read_mask(_s: *mut N4Cycles, _i: i32, _coverage: *mut f32) -> i32 {
+        pub unsafe fn n4c_read_mask(
+            _s: *mut N4Cycles,
+            _i: i32,
+            _coverage: *mut f32,
+            _count: i64,
+        ) -> i32 {
             unreachable!("no Cycles session can exist without the bundle")
         }
         pub unsafe fn n4c_peak_memory(_s: *mut N4Cycles) -> i64 {
             unreachable!("no Cycles session can exist without the bundle")
         }
-        pub unsafe fn n4c_read_depth(_s: *mut N4Cycles, _depth: *mut f32) -> i32 {
+        pub unsafe fn n4c_read_depth(_s: *mut N4Cycles, _depth: *mut f32, _count: i64) -> i32 {
             unreachable!("no Cycles session can exist without the bundle")
         }
-        pub unsafe fn n4c_read_cryptomatte(_s: *mut N4Cycles, _layer: i32, _rgba: *mut f32) -> i32 {
+        pub unsafe fn n4c_read_cryptomatte(
+            _s: *mut N4Cycles,
+            _layer: i32,
+            _rgba: *mut f32,
+            _count: i64,
+        ) -> i32 {
             unreachable!("no Cycles session can exist without the bundle")
         }
         pub unsafe fn n4c_cancel(_s: *mut N4Cycles) {
@@ -296,6 +315,11 @@ mod sys {
 }
 
 pub use sys::N4Timing as Timing;
+
+/// The pinned Cycles release and the revision of this bridge's rendering. A host that keeps
+/// rendered pictures makes this part of their identity. Raise the bridge number whenever a change
+/// here or in `native/` can alter a picture.
+pub const REVISION: &str = "cycles 5.3.0, n4 bridge 1";
 
 /// Whether this build links a provisioned Cycles bundle.
 pub const fn available() -> bool {
@@ -354,36 +378,61 @@ pub struct Outputs<'a> {
     pub mask_pass_ids: &'a [u32],
     pub depth: bool,
     pub cryptomatte: bool,
+    /// Checked from before the scene is handed over until the last sample: once it is set the
+    /// render stops and returns an error. A request made before the call is honoured too, and
+    /// the caller clears the flag.
+    pub stop: Option<&'a AtomicBool>,
+}
+
+unsafe extern "C" fn stop_requested(flag: *mut std::ffi::c_void) -> i32 {
+    // SAFETY: `render_with` passes a flag it borrows for the whole call.
+    unsafe { &*(flag as *const AtomicBool) }.load(Ordering::Relaxed) as i32
 }
 
 pub struct Session {
     raw: *mut sys::N4Cycles,
     descs: Vec<sys::N4Material>,
+    shared: Arc<Shared>,
 }
 
-/// Watches or stops a render from another thread while `Session::render` blocks.
-#[derive(Clone, Copy)]
-pub struct Monitor(usize);
-// The three calls behind it take Cycles' own locks.
-unsafe impl Send for Monitor {}
-unsafe impl Sync for Monitor {}
+/// The session's address for its monitors, or zero once the session is gone.
+struct Shared(Mutex<usize>);
+
+/// Watches or stops a render from another thread while `Session::render` blocks. It may outlive
+/// the session; it then reports nothing and stops nothing.
+#[derive(Clone)]
+pub struct Monitor(Arc<Shared>);
 
 impl Monitor {
+    fn with<T>(&self, absent: T, call: impl FnOnce(*mut sys::N4Cycles) -> T) -> T {
+        // Held across the call, so the session cannot be destroyed under it. The calls behind
+        // a monitor take Cycles' own locks and never wait for a render.
+        let raw = self.0.0.lock().unwrap();
+        if *raw == 0 {
+            absent
+        } else {
+            call(*raw as *mut sys::N4Cycles)
+        }
+    }
     /// Stop the render in flight. `render` then returns an error and the session stays usable.
+    /// Without a render in flight it does nothing.
     pub fn cancel(&self) {
-        unsafe { sys::n4c_cancel(self.0 as *mut sys::N4Cycles) }
+        self.with((), |raw| unsafe { sys::n4c_cancel(raw) })
     }
     /// 0..1.
     pub fn progress(&self) -> f32 {
-        unsafe { sys::n4c_progress(self.0 as *mut sys::N4Cycles) }
+        self.with(0., |raw| unsafe { sys::n4c_progress(raw) })
     }
     /// How many in-progress pictures Cycles has handed over in this render.
     pub fn snapshots(&self) -> u32 {
-        unsafe { sys::n4c_snapshot_count(self.0 as *mut sys::N4Cycles) as u32 }
+        self.with(0, |raw| unsafe { sys::n4c_snapshot_count(raw) as u32 })
     }
-    /// Copy the latest in-progress picture. `rgba` holds width * height * 4 floats.
+    /// Copy the latest in-progress picture into `rgba`, which holds width * height * 4 floats.
+    /// False when there is none of exactly that size.
     pub fn snapshot(&self, rgba: &mut [f32]) -> bool {
-        unsafe { sys::n4c_read_color(self.0 as *mut sys::N4Cycles, rgba.as_mut_ptr()) == 0 }
+        self.with(false, |raw| unsafe {
+            sys::n4c_read_color(raw, rgba.as_mut_ptr(), rgba.len() as i64) == 0
+        })
     }
 }
 
@@ -421,6 +470,7 @@ impl Session {
         Ok(Self {
             raw,
             descs: Vec::new(),
+            shared: Arc::new(Shared(Mutex::new(raw as usize))),
         })
     }
 
@@ -528,7 +578,7 @@ impl Session {
     }
 
     pub fn monitor(&self) -> Monitor {
-        Monitor(self.raw as usize)
+        Monitor(Arc::clone(&self.shared))
     }
 
     /// One Cycles object per rigid part, so a part pose is a transform update only.
@@ -721,6 +771,10 @@ impl Session {
             mask_pass_ids: ids.as_ptr(),
             depth: outputs.depth as i32,
             cryptomatte: outputs.cryptomatte as i32,
+            stop: outputs.stop.map(|_| stop_requested as _),
+            stop_user: outputs.stop.map_or(std::ptr::null_mut(), |flag| {
+                flag as *const AtomicBool as *mut _
+            }),
         };
         let mut timing = Timing::default();
         if unsafe { sys::n4c_render(self.raw, &r, &mut timing) } != 0 {
@@ -730,7 +784,7 @@ impl Session {
         let pixels = (size[0] * size[1]) as usize;
         let mut color = vec![0f32; pixels * 4];
         ensure!(
-            unsafe { sys::n4c_read_color(self.raw, color.as_mut_ptr()) } == 0,
+            unsafe { sys::n4c_read_color(self.raw, color.as_mut_ptr(), color.len() as i64) } == 0,
             "{}",
             last_error()
         );
@@ -738,7 +792,8 @@ impl Session {
         for i in 0..ids.len() {
             let mut m = vec![0f32; pixels];
             ensure!(
-                unsafe { sys::n4c_read_mask(self.raw, i as i32, m.as_mut_ptr()) } == 0,
+                unsafe { sys::n4c_read_mask(self.raw, i as i32, m.as_mut_ptr(), m.len() as i64) }
+                    == 0,
                 "{}",
                 last_error()
             );
@@ -747,7 +802,7 @@ impl Session {
         let depth = if outputs.depth {
             let mut d = vec![0f32; pixels];
             ensure!(
-                unsafe { sys::n4c_read_depth(self.raw, d.as_mut_ptr()) } == 0,
+                unsafe { sys::n4c_read_depth(self.raw, d.as_mut_ptr(), d.len() as i64) } == 0,
                 "{}",
                 last_error()
             );
@@ -759,7 +814,9 @@ impl Session {
         for layer in 0..if outputs.cryptomatte { 3 } else { 0 } {
             let mut c = vec![0f32; pixels * 4];
             ensure!(
-                unsafe { sys::n4c_read_cryptomatte(self.raw, layer, c.as_mut_ptr()) } == 0,
+                unsafe {
+                    sys::n4c_read_cryptomatte(self.raw, layer, c.as_mut_ptr(), c.len() as i64)
+                } == 0,
                 "{}",
                 last_error()
             );
@@ -819,6 +876,9 @@ fn material_desc(
 
 impl Drop for Session {
     fn drop(&mut self) {
+        // No monitor is mid-call, and none will reach the session again.
+        let mut shared = self.shared.0.lock().unwrap();
+        *shared = 0;
         unsafe { sys::n4c_destroy(self.raw) }
     }
 }

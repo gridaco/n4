@@ -776,6 +776,7 @@ fn features(args: &[String]) -> Result<()> {
             mask_pass_ids: &[1, 2],
             depth: true,
             cryptomatte: true,
+            stop: None,
         },
     )?;
     let with_extras = t.elapsed().as_secs_f64();

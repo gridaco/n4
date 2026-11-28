@@ -32,16 +32,18 @@ Three kinds of picture the rasterizer cannot make: a softbox whose size shapes b
 
 ## Contract
 
-**A finished picture is identified by what the scene evaluates to.** The key hashes the authored scene, the frame and sub-frame, the camera, the output size, the geometry's bytes and the requested mattes. [`final_key`](../engine/src/render/gpu/spatial.rs)
+**A finished picture is identified by content, not by location.** The key hashes the authored scene with every file it names replaced by a digest of that file's bytes, the scene's frame and sub-frame, the camera, the output size, the imported geometry, materials and textures, the requested mattes, the Cycles device, release and bridge revision. A surface that shows video, a wipe or a periodic shader is also keyed on the shot's clock, because those are sampled on it. [`final_key`](../engine/src/render/gpu/spatial.rs)
+
+The key covers the scene as authored, so it errs toward tracing again: a keyframe changed elsewhere in the scene re-traces frames it does not affect, and sliding a scene whose screen shows video re-traces it.
 
 | Concern | Rule |
 | --- | --- |
 | Draft or Final | The spatial pass looks the key up. A stored picture is composited as the group; otherwise the rasterizer draws and a request is left behind. `RenderTrace.graphics` counts `path_traced_final` and `path_traced_draft`. |
 | Tracing | `Engine::render_final` resolves the requests: it reads back each live surface, hands one evaluated instant to the path tracer, applies N4's film curve on the CPU and stores the group. It then renders again. |
-| Invalidation | An edit outside the scene leaves the key unchanged and re-traces nothing. New artwork, a moved part, light or camera is a new picture. |
+| Invalidation | An edit outside the scene leaves the key unchanged and re-traces nothing. New artwork, a moved part, light or camera is a new picture, and so is footage or an image replaced on disk under the same name. A copy of the project elsewhere finds the same pictures. |
 | Sample pattern | The seed follows from the recipe and the key, never from render order. |
-| Persistence | Hosts keep pictures in the user cache (`~/Library/Caches/n4/final`, or `N4_FINAL_STORE`). Keys describe content, so a copy of a project finds the same pictures. Nothing evicts them yet. |
-| Interaction | The transport follows a parked Draft with its Final and interrupts the trace when the user moves on. Draft pictures are not kept in the composed-frame cache. |
+| Persistence | Hosts keep pictures in the user cache (`~/Library/Caches/n4/final`, or `N4_FINAL_STORE`). Keys describe content, so a copy of a project finds the same pictures. The cache holds 20 GB (`N4_FINAL_STORE_GB`); beyond that the pictures used longest ago are deleted and would be traced again. A directory named with `--final-store` is never trimmed. |
+| Interaction | The transport follows a parked Draft with its Final. Moving on, an export and its cancellation each stop a trace in flight, including one that has not started sampling. Pausing or releasing a drag on a Draft asks for that frame's Final. Draft pictures are not kept in the composed-frame cache. |
 | Colour and alpha | Cycles returns scene-linear premultiplied colour on a transparent film. The group handed to the 2D stack has the same format as the rasterizer's. |
 
 The engine's path tracer sits behind [`render/path_trace.rs`](../engine/src/render/path_trace.rs), which takes an evaluated request and returns a picture. Nothing above it names Cycles. A tracer written against wgpu could replace it there; that is a separate project and is not planned here.
@@ -52,16 +54,19 @@ One machine: Apple M4 Pro, macOS 26.6, 1080p, Cycles on Metal. [Receipt](../spat
 
 | Check | Result |
 | --- | --- |
-| Final traced once per frame | 3 of 3 frames traced; 4.6 to 5.5 s each |
+| Final traced once per frame | 3 of 3 frames traced; 4.5 to 5.6 s each |
 | A second process, reverse order | 0 traced; pictures byte-identical |
+| A relative path; a copy of the project | 0 traced |
 | Cold re-render, reverse order | Largest difference 1 of 255 |
 | Caption edit | 0 traced; 0.2 s a frame |
-| New word on the screen | 3 traced; 9,737 pixels changed on frame 4, 1,177 of them below the lid |
+| New word on the screen | 3 traced; 9,657 pixels changed on frame 4, 1,185 of them below the lid |
 | Footage slipped three frames | 3 traced |
 | Key light moved | 3 traced |
-| Range, then export | 51 frames traced in 232 s (4.5 s median); export 1.1 s; a second export fed the encoder the same bytes |
+| Range, then export | 51 frames traced in 225 s (4.4 s median); export 1.1 s; a second export fed the encoder the same bytes |
 
-Outside N4, the same bridge rendered this shot from the importer's data and was compared with Blender 5.3's own Cycles reading the same USD and light rig: mean difference 0.83 of 255 at 4096 samples, brightness within 1.4%. Engine tests cover the Draft count, single tracing, the edits above on a small frame, export, and the transport's Draft-then-Final. [`tests/path_trace.rs`](../engine/tests/path_trace.rs) · [Bridge tests](../spatial/cycles/tests/bridge.rs)
+The receipt backs the table above. The other figures in this document (the Blender comparison, the Draft's match on matte surfaces, the 51-frame repeat, held-frame noise, memory and first-start time) were measured once in a standalone study with this bridge on the same machine; nothing tracked reproduces them yet.
+
+In that study the bridge rendered this shot from the importer's data and was compared with Blender 5.3's own Cycles reading the same USD and light rig: mean difference 0.83 of 255 at 4096 samples, brightness within 1.4%. Engine tests cover the Draft count, single tracing, the edits above on a small frame, export, and the transport's Draft-then-Final. [`tests/path_trace.rs`](../engine/tests/path_trace.rs) · [Bridge tests](../spatial/cycles/tests/bridge.rs)
 
 ## Limits
 
@@ -71,7 +76,7 @@ Outside N4, the same bridge rendered this shot from the importer's data and was 
 - **First start.** The first render on a machine compiles Cycles' GPU programs: about three minutes on the M4 Pro, then about a second. What invalidates that cache is not characterised.
 - **Memory.** The bridge caps Cycles' path pool at about a million paths (0.5 GB). Denoising adds about 2.9 GB at 1080p.
 - **Cycles' C++ API is undocumented and unstable.** The bridge is pinned to v5.3.0; an upgrade needs re-qualification.
-- **Not built:** in-progress pictures in the viewer (the bridge can deliver them, at a cost of about 0.6 s a frame); eviction of stored pictures; path-traced text planes and distant lights; projected mattes; signing of the Cycles bundle; any machine other than the one above.
+- **Not built:** in-progress pictures in the viewer (the bridge can deliver them, at a cost of about 0.6 s a frame); path-traced text planes and distant lights; projected mattes; signing of the Cycles bundle; any machine other than the one above.
 
 ## Build
 

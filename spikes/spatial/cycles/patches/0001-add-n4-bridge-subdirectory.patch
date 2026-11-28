@@ -7,7 +7,7 @@ index a04fd60..0d54fba 100644
      DESTINATION ${app_install_dir})
  endif()
 +
-+# N4 bridge (out-of-tree source, see n4-renderer/cycles).
++# N4 bridge, built from a directory outside this tree (N4_BRIDGE_DIR).
 +if(N4_BRIDGE_DIR)
 +  add_subdirectory(${N4_BRIDGE_DIR} n4_bridge)
 +endif()

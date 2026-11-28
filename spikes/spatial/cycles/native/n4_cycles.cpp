@@ -5,6 +5,7 @@
 #include "device/device.h"
 /* shader.h must precede background.h, or Background::set_shader binds to the bool overload. */
 #include "scene/shader.h"
+#include "integrator/path_trace.h"
 #include "scene/background.h"
 #include "scene/camera.h"
 #include "scene/film.h"
@@ -27,6 +28,9 @@
 #include "util/time.h"
 #include "util/transform.h"
 
+#include <atomic>
+#include <chrono>
+#include <thread>
 #include <dlfcn.h>
 #include <memory>
 #include <mutex>
@@ -35,7 +39,8 @@
 
 using namespace ccl;
 
-static std::string g_error;
+/* Each thread reads the message of its own last failing call. */
+static thread_local std::string g_error;
 
 namespace {
 
@@ -192,8 +197,23 @@ struct MaterialState {
 
 }  // namespace
 
+/* Session::cancel also cancels the device, and a Metal device retired that way never compiles
+ * a kernel again: the next scene change that needs one would wait forever. This stops the path
+ * tracer alone. */
+struct N4Session : public Session {
+  using Session::Session;
+  void stop_tracing()
+  {
+    progress.set_cancel("Cancelled");
+    if (path_trace_) {
+      /* Returns once the work in flight has stopped. Not for Cycles' own threads. */
+      path_trace_->cancel();
+    }
+  }
+};
+
 struct N4Cycles {
-  std::unique_ptr<Session> session;
+  std::unique_ptr<N4Session> session;
   SessionParams params;
   std::string device_description;
   std::vector<ImageData> images;
@@ -205,7 +225,39 @@ struct N4Cycles {
   bool passes_dirty = true;
   int last_denoise = -1;
   int last_outputs = -1;
+  /* Set by n4c_cancel, or reported by the caller's own test, for the render in flight. */
+  std::atomic<bool> cancel{false};
+  std::atomic<int32_t (*)(void *)> stop{nullptr};
+  std::atomic<void *> stop_user{nullptr};
+  bool stop_requested()
+  {
+    int32_t (*test)(void *) = stop.load();
+    return cancel.load() || (test && test(stop_user.load()));
+  }
 };
+
+/* No exception may leave an entry point: the caller is not C++. */
+#define N4C_GUARD(failure, ...) \
+  try { \
+    __VA_ARGS__ \
+  } \
+  catch (const std::exception &e) { \
+    g_error = e.what(); \
+    return failure; \
+  } \
+  catch (...) { \
+    g_error = "unknown failure in Cycles"; \
+    return failure; \
+  }
+
+template<typename T> static bool known(const std::vector<T> &items, int32_t id, const char *what)
+{
+  if (id < 0 || size_t(id) >= items.size()) {
+    g_error = std::string("unknown ") + what + " id";
+    return false;
+  }
+  return true;
+}
 
 static Transform tfm_from_rows(const float *m)
 {
@@ -388,7 +440,13 @@ N4Cycles *n4c_create(const char *device, int32_t threads, int32_t snapshots)
     s->params.samples = 1;
     SceneParams scene_params;
     scene_params.shadingsystem = SHADINGSYSTEM_SVM;
-    s->session = make_unique<Session>(s->params, scene_params);
+    s->session = make_unique<N4Session>(s->params, scene_params);
+    N4Cycles *raw = s.get();
+    s->session->progress.set_cancel_callback([raw] {
+      if (raw->stop_requested()) {
+        raw->session->progress.set_cancel("Cancelled");
+      }
+    });
     return s.release();
   }
   catch (const std::exception &e) {
@@ -412,6 +470,11 @@ const char *n4c_device_description(N4Cycles *s)
 
 int32_t n4c_image_create(N4Cycles *s, int32_t width, int32_t height, int32_t srgb, const uint8_t *rgba)
 {
+  if (width <= 0 || height <= 0) {
+    g_error = "an image needs a size";
+    return -1;
+  }
+  N4C_GUARD(-1, {
   ImageData d;
   d.width = width;
   d.height = height;
@@ -419,10 +482,15 @@ int32_t n4c_image_create(N4Cycles *s, int32_t width, int32_t height, int32_t srg
   d.pixels = std::make_shared<std::vector<uint8_t>>(rgba, rgba + size_t(width) * height * 4);
   s->images.push_back(d);
   return int32_t(s->images.size() - 1);
+  })
 }
 
 int32_t n4c_image_update(N4Cycles *s, int32_t image, int32_t width, int32_t height, const uint8_t *rgba)
 {
+  if (!known(s->images, image, "image") || width <= 0 || height <= 0) {
+    return -1;
+  }
+  N4C_GUARD(-1, {
   const thread_scoped_lock lock(s->session->scene->mutex);
   ImageData &d = s->images[image];
   d.width = width;
@@ -438,10 +506,12 @@ int32_t n4c_image_update(N4Cycles *s, int32_t image, int32_t width, int32_t heig
     }
   }
   return 0;
+  })
 }
 
 int32_t n4c_material_create(N4Cycles *s, const N4Material *m)
 {
+  N4C_GUARD(-1, {
   const thread_scoped_lock lock(s->session->scene->mutex);
   MaterialState state;
   state.shader = s->session->scene->create_node<Shader>();
@@ -449,14 +519,20 @@ int32_t n4c_material_create(N4Cycles *s, const N4Material *m)
   s->materials.push_back(state);
   build_graph(s, s->materials.back());
   return int32_t(s->materials.size() - 1);
+  })
 }
 
 int32_t n4c_material_update(N4Cycles *s, int32_t material, const N4Material *m)
 {
+  if (!known(s->materials, material, "material")) {
+    return -1;
+  }
+  N4C_GUARD(-1, {
   const thread_scoped_lock lock(s->session->scene->mutex);
   s->materials[material].desc = *m;
   build_graph(s, s->materials[material]);
   return 0;
+  })
 }
 
 int32_t n4c_object_create(N4Cycles *s, const char *name, int32_t vertex_count, const float *positions,
@@ -464,6 +540,7 @@ int32_t n4c_object_create(N4Cycles *s, const char *name, int32_t vertex_count, c
                           const uint32_t *indices, const uint32_t *tri_material,
                           int32_t material_count, const int32_t *materials, int32_t pass_id)
 {
+  N4C_GUARD(-1, {
   Scene *scene = s->session->scene.get();
   const thread_scoped_lock lock(scene->mutex);
   Mesh *mesh = scene->create_node<Mesh>();
@@ -516,20 +593,30 @@ int32_t n4c_object_create(N4Cycles *s, const char *name, int32_t vertex_count, c
   object->tag_update(scene);
   s->objects.push_back(object);
   return int32_t(s->objects.size() - 1);
+  })
 }
 
 int32_t n4c_object_transform(N4Cycles *s, int32_t object, const float *m)
 {
+  if (!known(s->objects, object, "object")) {
+    return -1;
+  }
+  N4C_GUARD(-1, {
   Scene *scene = s->session->scene.get();
   const thread_scoped_lock lock(scene->mutex);
   Object *o = s->objects[object];
   o->set_tfm(tfm_from_rows(m));
   o->tag_update(scene);
   return 0;
+  })
 }
 
 int32_t n4c_object_camera_visible(N4Cycles *s, int32_t object, int32_t visible)
 {
+  if (!known(s->objects, object, "object")) {
+    return -1;
+  }
+  N4C_GUARD(-1, {
   Scene *scene = s->session->scene.get();
   const thread_scoped_lock lock(scene->mutex);
   Object *o = s->objects[object];
@@ -537,6 +624,7 @@ int32_t n4c_object_camera_visible(N4Cycles *s, int32_t object, int32_t visible)
   o->set_visibility(visible ? (v | PATH_RAY_VISIBILITY_CAMERA) : (v & ~PATH_RAY_VISIBILITY_CAMERA));
   o->tag_update(scene);
   return 0;
+  })
 }
 
 static void place_rect(Object *object, AreaLight *light, const float *c, const float *u, const float *v,
@@ -558,6 +646,7 @@ static void place_rect(Object *object, AreaLight *light, const float *c, const f
 int32_t n4c_light_rect(N4Cycles *s, const float *center, const float *edge_u, const float *edge_v,
                        const float *radiance, int32_t camera_visible)
 {
+  N4C_GUARD(-1, {
   Scene *scene = s->session->scene.get();
   const thread_scoped_lock lock(scene->mutex);
   Object *object = scene->create_node<Object>();
@@ -583,11 +672,16 @@ int32_t n4c_light_rect(N4Cycles *s, const float *center, const float *edge_u, co
   object->tag_update(scene);
   s->lights.push_back(object);
   return int32_t(s->lights.size() - 1);
+  })
 }
 
 int32_t n4c_light_rect_update(N4Cycles *s, int32_t light, const float *center, const float *edge_u,
                               const float *edge_v, const float *radiance)
 {
+  if (!known(s->lights, light, "light")) {
+    return -1;
+  }
+  N4C_GUARD(-1, {
   Scene *scene = s->session->scene.get();
   const thread_scoped_lock lock(scene->mutex);
   Object *object = s->lights[light];
@@ -596,10 +690,12 @@ int32_t n4c_light_rect_update(N4Cycles *s, int32_t light, const float *center, c
   l->tag_update(scene);
   object->tag_update(scene);
   return 0;
+  })
 }
 
 int32_t n4c_light_distant(N4Cycles *s, const float *direction, const float *irradiance, float angle_degrees)
 {
+  N4C_GUARD(-1, {
   Scene *scene = s->session->scene.get();
   const thread_scoped_lock lock(scene->mutex);
   Object *object = scene->create_node<Object>();
@@ -631,6 +727,7 @@ int32_t n4c_light_distant(N4Cycles *s, const float *direction, const float *irra
   object->tag_update(scene);
   s->lights.push_back(object);
   return int32_t(s->lights.size() - 1);
+  })
 }
 
 void n4c_background(N4Cycles *s, const float *radiance, int32_t transparent_film)
@@ -667,7 +764,26 @@ void n4c_camera(N4Cycles *s, const float *p, const float *r, const float *u, con
 
 int32_t n4c_render(N4Cycles *s, const N4Render *r, N4Timing *timing)
 {
+  /* The caller's test and a cancel apply to this render only. */
+  struct Stop {
+    N4Cycles *s;
+    ~Stop()
+    {
+      s->stop = nullptr;
+      s->stop_user = nullptr;
+      s->cancel = false;
+    }
+  } stop{s};
+  s->stop_user = r->stop_user;
+  s->stop = r->stop;
   try {
+    if (s->stop_requested()) {
+      if (timing) {
+        *timing = N4Timing{};
+        timing->cancelled = 1;
+      }
+      return 0;
+    }
     Session *session = s->session.get();
     Scene *scene = session->scene.get();
     const double t0 = time_dt();
@@ -735,6 +851,11 @@ int32_t n4c_render(N4Cycles *s, const N4Render *r, N4Timing *timing)
       {
         const std::lock_guard<std::mutex> capture_lock(s->captured.mutex);
         s->captured.snapshots = 0;
+        /* Nothing of an earlier render, at whatever size, can be read as this one's. */
+        s->captured.color.clear();
+        s->captured.depth.clear();
+        s->captured.masks.clear();
+        s->captured.crypto.clear();
       }
       session->set_output_driver(
           make_unique<CaptureDriver>(&s->captured, r->mask_count, r->depth != 0, r->cryptomatte != 0));
@@ -742,7 +863,23 @@ int32_t n4c_render(N4Cycles *s, const N4Render *r, N4Timing *timing)
     }
     const double t1 = time_dt();
     session->start();
-    session->wait();
+    {
+      /* Cycles looks at its progress only between batches of samples, which can be seconds
+       * apart. Watch for a stop here and interrupt the batch itself. */
+      std::atomic<bool> done{false};
+      std::thread watch([s, &done] {
+        while (!done.load()) {
+          if (s->stop_requested()) {
+            s->session->stop_tracing();
+            return;
+          }
+          std::this_thread::sleep_for(std::chrono::milliseconds(4));
+        }
+      });
+      session->wait();
+      done = true;
+      watch.join();
+    }
     const double t2 = time_dt();
     if (timing) {
       timing->sync_seconds = t1 - t0;
@@ -761,52 +898,63 @@ int32_t n4c_render(N4Cycles *s, const N4Render *r, N4Timing *timing)
     g_error = e.what();
     return -1;
   }
-}
-
-int32_t n4c_read_color(N4Cycles *s, float *rgba)
-{
-  const std::lock_guard<std::mutex> lock(s->captured.mutex);
-  if (s->captured.color.empty()) {
-    g_error = "no colour captured";
+  catch (...) {
+    g_error = "unknown failure in Cycles";
     return -1;
   }
-  memcpy(rgba, s->captured.color.data(), s->captured.color.size() * sizeof(float));
+}
+
+/* Copy a captured pass into a buffer of exactly `count` floats. */
+static int32_t read_pass(const std::vector<float> &from, float *to, int64_t count, const char *what)
+{
+  if (from.empty()) {
+    g_error = std::string(what) + " not captured";
+    return -1;
+  }
+  if (count < 0 || size_t(count) != from.size()) {
+    g_error = std::string(what) + " has " + std::to_string(from.size()) + " values, the buffer " +
+              std::to_string(count);
+    return -1;
+  }
+  memcpy(to, from.data(), from.size() * sizeof(float));
   return 0;
 }
 
-int32_t n4c_read_mask(N4Cycles *s, int32_t i, float *coverage)
+int32_t n4c_read_color(N4Cycles *s, float *rgba, int64_t count)
 {
-  if (i < 0 || size_t(i) >= s->captured.masks.size() || s->captured.masks[i].empty()) {
+  const std::lock_guard<std::mutex> lock(s->captured.mutex);
+  return read_pass(s->captured.color, rgba, count, "colour");
+}
+
+int32_t n4c_read_mask(N4Cycles *s, int32_t i, float *coverage, int64_t count)
+{
+  const std::lock_guard<std::mutex> lock(s->captured.mutex);
+  if (i < 0 || size_t(i) >= s->captured.masks.size()) {
     g_error = "mask not captured";
     return -1;
   }
-  memcpy(coverage, s->captured.masks[i].data(), s->captured.masks[i].size() * sizeof(float));
-  return 0;
+  return read_pass(s->captured.masks[i], coverage, count, "mask");
 }
 
-int32_t n4c_read_depth(N4Cycles *s, float *depth)
+int32_t n4c_read_depth(N4Cycles *s, float *depth, int64_t count)
 {
-  if (s->captured.depth.empty()) {
-    g_error = "depth not captured";
-    return -1;
-  }
-  memcpy(depth, s->captured.depth.data(), s->captured.depth.size() * sizeof(float));
-  return 0;
+  const std::lock_guard<std::mutex> lock(s->captured.mutex);
+  return read_pass(s->captured.depth, depth, count, "depth");
 }
 
-int32_t n4c_read_cryptomatte(N4Cycles *s, int32_t layer, float *rgba)
+int32_t n4c_read_cryptomatte(N4Cycles *s, int32_t layer, float *rgba, int64_t count)
 {
+  const std::lock_guard<std::mutex> lock(s->captured.mutex);
   if (layer < 0 || size_t(layer) >= s->captured.crypto.size()) {
     g_error = "cryptomatte layer not captured";
     return -1;
   }
-  memcpy(rgba, s->captured.crypto[layer].data(), s->captured.crypto[layer].size() * sizeof(float));
-  return 0;
+  return read_pass(s->captured.crypto[layer], rgba, count, "cryptomatte layer");
 }
 
 void n4c_cancel(N4Cycles *s)
 {
-  s->session->cancel(true);
+  s->cancel = true;
 }
 
 float n4c_progress(N4Cycles *s)

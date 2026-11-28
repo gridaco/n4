@@ -5,6 +5,20 @@ use anyhow::Result;
 use n4_engine::{Engine, Project};
 use std::{fs, path::Path};
 
+/// Tests that trace have nothing to run in a build without the path tracer.
+/// `N4_REQUIRE_CYCLES=1` makes that a failure, for a machine that is meant to have it.
+fn tracer() -> bool {
+    let Some(reason) = Engine::path_trace_unavailable() else {
+        return true;
+    };
+    assert!(
+        std::env::var_os("N4_REQUIRE_CYCLES").is_none(),
+        "N4_REQUIRE_CYCLES is set: {reason}"
+    );
+    eprintln!("skipped: {reason}");
+    false
+}
+
 fn project(root: &Path, screen: &str, caption: &str, key_x: f32) -> Result<Project> {
     let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples/field-unit/assets");
     fs::create_dir_all(root.join("sequences"))?;
@@ -14,6 +28,12 @@ fn project(root: &Path, screen: &str, caption: &str, key_x: f32) -> Result<Proje
             fs::copy(example.join(name), root.join("assets").join(name))?;
         }
     }
+    // Artwork on the screen comes from a file once the test has written one.
+    let artwork = if root.join("assets/card.png").exists() {
+        r#"<image source="assets/card.png"/>"#
+    } else {
+        ""
+    };
     fs::write(
         root.join("project.proj"),
         "project traced fps 24/1 size 160x90\n[0,2) V1 shot\n[0,2) V2 caption\n",
@@ -32,7 +52,7 @@ fn project(root: &Path, screen: &str, caption: &str, key_x: f32) -> Result<Proje
     <usd id="recorder" source="assets/field.usdc" prim="/World/Recorder">
       <part prim="/World/Recorder/Hinge" rotation-x="30"/>
       <surface slot="/World/_materials/Display" role="emissive" glow="4" size="64 36">
-        <rect width="64" height="36" fill="{screen}"/>
+        <rect width="64" height="36" fill="{screen}"/>{artwork}
       </surface>
     </usd>
   </scene3d>
@@ -65,6 +85,19 @@ fn a_scene_without_its_final_is_drawn_and_counted_as_draft() -> Result<()> {
             .count()
             > 2_000
     );
+    // The same scene with its only rect light on the other side is lit differently.
+    let other = tempfile::tempdir()?;
+    let moved = Engine::new(project(other.path(), "#20c0ff", "ONE", 0.36)?)?.render(0)?;
+    let relit = moved
+        .rgba
+        .chunks_exact(4)
+        .zip(draft.rgba.chunks_exact(4))
+        .filter(|(a, b)| (0..3).any(|i| a[i].abs_diff(b[i]) > 16))
+        .count();
+    assert!(
+        relit > 1_000,
+        "moving the rect light changed {relit} pixels"
+    );
     if let Some(reason) = Engine::path_trace_unavailable() {
         let Err(error) = engine.render_final(0) else {
             panic!("a Final cannot be produced without a path tracer")
@@ -76,8 +109,7 @@ fn a_scene_without_its_final_is_drawn_and_counted_as_draft() -> Result<()> {
 
 #[test]
 fn a_final_is_traced_once_and_only_scene_edits_trace_again() -> Result<()> {
-    if let Some(reason) = Engine::path_trace_unavailable() {
-        eprintln!("skipped: {reason}");
+    if !tracer() {
         return Ok(());
     }
     // The CPU device needs no GPU program compilation.
@@ -146,10 +178,68 @@ fn a_final_is_traced_once_and_only_scene_edits_trace_again() -> Result<()> {
     Ok(())
 }
 
+fn write_card(root: &Path, rgb: [u8; 3]) -> Result<()> {
+    let file = fs::File::create(root.join("assets/card.png"))?;
+    let mut png = png::Encoder::new(std::io::BufWriter::new(file), 64, 36);
+    png.set_color(png::ColorType::Rgb);
+    png.set_depth(png::BitDepth::Eight);
+    png.write_header()?.write_image_data(&rgb.repeat(64 * 36))?;
+    Ok(())
+}
+
+#[test]
+fn artwork_replaced_on_disk_under_the_same_name_is_traced_again() -> Result<()> {
+    if !tracer() {
+        return Ok(());
+    }
+    unsafe { std::env::set_var("N4_CYCLES_DEVICE", "CPU") };
+    let root = tempfile::tempdir()?;
+    let store = tempfile::tempdir()?;
+    fs::create_dir_all(root.path().join("assets"))?;
+    write_card(root.path(), [0, 200, 40])?;
+    let mut engine = Engine::new(project(root.path(), "#000000", "ONE", -0.36)?)?;
+    engine.persist_finals(store.path().to_path_buf())?;
+    let (green, traced) = engine.render_final(0)?;
+    assert_eq!(traced, 1);
+    // The same file, untouched, is the same picture, also for a new engine.
+    engine.replace_project(project(root.path(), "#000000", "ONE", -0.36)?)?;
+    assert_eq!(engine.render_final(0)?.1, 0);
+
+    // A copy of the project elsewhere names other paths and holds the same content.
+    let copy = tempfile::tempdir()?;
+    fs::create_dir_all(copy.path().join("assets"))?;
+    fs::copy(
+        root.path().join("assets/card.png"),
+        copy.path().join("assets/card.png"),
+    )?;
+    let mut copied = Engine::new(project(copy.path(), "#000000", "ONE", -0.36)?)?;
+    copied.persist_finals(store.path().to_path_buf())?;
+    let (same, traced) = copied.render_final(0)?;
+    assert_eq!(traced, 0, "a copied project finds its pictures");
+    assert_eq!(same.rgba, green.rgba);
+
+    // The scene's description is unchanged; only the file's content differs.
+    write_card(root.path(), [230, 20, 20])?;
+    let mut reopened = Engine::new(project(root.path(), "#000000", "ONE", -0.36)?)?;
+    reopened.persist_finals(store.path().to_path_buf())?;
+    let (red, traced) = reopened.render_final(0)?;
+    assert_eq!(traced, 1, "replaced artwork is a new picture");
+    let differing = red
+        .rgba
+        .chunks_exact(4)
+        .zip(green.rgba.chunks_exact(4))
+        .filter(|(a, b)| (0..3).any(|i| a[i].abs_diff(b[i]) > 24))
+        .count();
+    assert!(
+        differing > 200,
+        "the screen changed colour in {differing} pixels"
+    );
+    Ok(())
+}
+
 #[test]
 fn a_parked_transport_presents_the_draft_and_then_its_final() -> Result<()> {
-    if let Some(reason) = Engine::path_trace_unavailable() {
-        eprintln!("skipped: {reason}");
+    if !tracer() {
         return Ok(());
     }
     let root = tempfile::tempdir()?;

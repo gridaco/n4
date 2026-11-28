@@ -12,8 +12,10 @@ fn main() {
         .clone()
         .unwrap_or_else(|| manifest.join("../../../.local/cycles/install"));
     let lib = dir.join("libn4cycles.dylib");
-    println!("cargo:rerun-if-changed={}", lib.display());
     if !lib.is_file() {
+        // Cargo treats a missing path as always changed, which would rebuild this crate and its
+        // dependents on every invocation. provision.sh touches this script instead.
+        println!("cargo:rerun-if-changed=build.rs");
         assert!(
             explicit.is_none() && std::env::var_os("CARGO_FEATURE_REQUIRE_SDK").is_none(),
             "Cycles bundle required: {} is missing (run tools/provision.sh or set N4_CYCLES_DIR)",
@@ -21,6 +23,8 @@ fn main() {
         );
         return;
     }
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed={}", lib.display());
     let dir = dir.canonicalize().expect("resolve Cycles bundle");
     println!("cargo:rustc-cfg=cycles_sdk");
     println!("cargo:rustc-link-search=native={}", dir.display());
